@@ -8,76 +8,81 @@ runs:
     - name: Checkout code
       uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
 
-    - name: Read .nvmrc
-      id: read-nvm
+    # - name: Read .nvmrc
+    #   id: read-nvm
+    #   shell: bash
+    #   run: |
+    #     echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
+
+    # - name: Setup node
+    #   uses: actions/setup-node@64ed1c7eab4cce3362f8c340dee64e5eaeef8f7c # v3.6.0
+    #   with:
+    #     node-version: ${{ steps.read-nvm.outputs.version }}
+
+    # - name: Install admin JS
+    #   if: github.event.repository.name != 'silverstripe-admin'
+    #   shell: bash
+    #   run: |
+    #     # Install admin js in sibling directory so shared components are available
+    #     DIR=$(pwd)
+    #     cd ..
+    #     git clone https://github.com/silverstripe/silverstripe-admin.git admin
+    #     # Assumption is that the default branch of admin is the correct one to build against
+    #     cd admin
+    #     # yarn comes preinstalled with actions/setup-node
+    #     yarn install
+    #     cd $DIR
+
+    # # Use `yarn install` rather than `yarn upgrade` to prevent the following error:
+    # # "error Outdated lockfile. Please run `yarn install` and try again."
+    # - name: Update yarn.lock
+    #   shell: bash
+    #   run: |
+    #     if [[ -f yarn.lock ]]; then
+    #       rm yarn.lock
+    #     fi
+    #     yarn install
+
+    # - name: Read package.json
+    #   id: package-json
+    #   shell: bash
+    #   run: |
+    #     # Read package.json to see if lint and test are runnable scripts
+    #     LINT="false"
+    #     TEST="false"
+    #     if [[ "$(jq .scripts.lint? package.json)" != "null" ]]; then LINT="true"; fi
+    #     if [[ "$(jq .scripts.test? package.json)" != "null" ]]; then TEST="true"; fi
+    #     echo "lint=$LINT" >> "$GITHUB_OUTPUT"
+    #     echo "test=$TEST" >> "$GITHUB_OUTPUT"
+    #     echo "LINT is $LINT"
+    #     echo "TEST is $TEST"
+
+    # # The following 3 steps make up `yarn build`
+    # # Splitting apart to make it easier to see where any failures originate from
+    # - name: Yarn lint
+    #   if: steps.package-json.outputs.lint == 'true'
+    #   shell: bash
+    #   run: |
+    #     yarn lint
+
+    # - name: Yarn test
+    #   if: steps.package-json.outputs.test == 'true'
+    #   shell: bash
+    #   run: |
+    #     yarn test
+
+    # - name: Build JS with webpack
+    #   # always run this and subsequent steps even if yarn.lint/yarn.test fails so that pull-request is
+    #   # created which will result in a red pull-request build so it's easy to see where things are at
+    #   if: always()
+    #   shell: bash
+    #   run: |
+    #     NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
+
+    - name: Make something to commit
       shell: bash
       run: |
-        echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
-
-    - name: Setup node
-      uses: actions/setup-node@64ed1c7eab4cce3362f8c340dee64e5eaeef8f7c # v3.6.0
-      with:
-        node-version: ${{ steps.read-nvm.outputs.version }}
-
-    - name: Install admin JS
-      if: github.event.repository.name != 'silverstripe-admin'
-      shell: bash
-      run: |
-        # Install admin js in sibling directory so shared components are available
-        DIR=$(pwd)
-        cd ..
-        git clone https://github.com/silverstripe/silverstripe-admin.git admin
-        # Assumption is that the default branch of admin is the correct one to build against
-        cd admin
-        # yarn comes preinstalled with actions/setup-node
-        yarn install
-        cd $DIR
-
-    # Use `yarn install` rather than `yarn upgrade` to prevent the following error:
-    # "error Outdated lockfile. Please run `yarn install` and try again."
-    - name: Update yarn.lock
-      shell: bash
-      run: |
-        if [[ -f yarn.lock ]]; then
-          rm yarn.lock
-        fi
-        yarn install
-
-    - name: Read package.json
-      id: package-json
-      shell: bash
-      run: |
-        # Read package.json to see if lint and test are runnable scripts
-        LINT="false"
-        TEST="false"
-        if [[ "$(jq .scripts.lint? package.json)" != "null" ]]; then LINT="true"; fi
-        if [[ "$(jq .scripts.test? package.json)" != "null" ]]; then TEST="true"; fi
-        echo "lint=$LINT" >> "$GITHUB_OUTPUT"
-        echo "test=$TEST" >> "$GITHUB_OUTPUT"
-        echo "LINT is $LINT"
-        echo "TEST is $TEST"
-
-    # The following 3 steps make up `yarn build`
-    # Splitting apart to make it easier to see where any failures originate from
-    - name: Yarn lint
-      if: steps.package-json.outputs.lint == 'true'
-      shell: bash
-      run: |
-        yarn lint
-
-    - name: Yarn test
-      if: steps.package-json.outputs.test == 'true'
-      shell: bash
-      run: |
-        yarn test
-
-    - name: Build JS with webpack
-      # always run this and subsequent steps even if yarn.lint/yarn.test fails so that pull-request is
-      # created which will result in a red pull-request build so it's easy to see where things are at
-      if: always()
-      shell: bash
-      run: |
-        NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
+        echo "." >> README.md
 
     - name: Remove any old pull-requests
       if: always()
