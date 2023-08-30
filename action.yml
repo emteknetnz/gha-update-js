@@ -19,160 +19,180 @@ runs:
     #   with:
     #     node-version: ${{ steps.read-nvm.outputs.version }}
 
-    # - name: Install admin JS
-    #   if: github.event.repository.name != 'silverstripe-admin'
-    #   shell: bash
-    #   run: |
-    #     # Install admin js in sibling directory so shared components are available
-    #     DIR=$(pwd)
-    #     cd ..
-    #     git clone https://github.com/silverstripe/silverstripe-admin.git admin
-    #     # Assumption is that the default branch of admin is the correct one to build against
-    #     cd admin
-    #     # yarn comes preinstalled with actions/setup-node
-    #     yarn install
-    #     cd $DIR
+    - name: Install nvm
+      shell: bash
+      run: |
+        # todo remove
+        echo "which nvm 1 is"
+        which nvm
+        #
+        curl -sL https://raw.githubusercontent.com/nvm-sh/nvm/v0.35.0/install.sh -o install_nvm.sh
+        if [[ $(sha1sum install_nvm.sh) != "2b5f64ec70c66ffa04946773673c424136ea75c5  install_nvm.sh" ]]; then
+          echo "sha1sum of install_nvm.sh does not match"
+          exit 1
+        fi
+        . install_nvm.sh
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        # todo remove
+        echo "which nvm 2 is"
+        which nvm
+        #
 
-    # # Use `yarn install` rather than `yarn upgrade` to prevent the following error:
-    # # "error Outdated lockfile. Please run `yarn install` and try again."
-    # - name: Update yarn.lock
-    #   shell: bash
-    #   run: |
-    #     if [[ -f yarn.lock ]]; then
-    #       rm yarn.lock
-    #     fi
-    #     yarn install
+    - name: Install admin JS
+      if: github.event.repository.name != 'silverstripe-admin'
+      shell: bash
+      run: |
+        # Install admin js in sibling directory so shared components are available
+        DIR=$(pwd)
+        cd ..
+        git clone https://github.com/silverstripe/silverstripe-admin.git admin
+        # Assumption is that the default branch of admin is the correct one to build against
+        cd admin
+        # yarn comes preinstalled with actions/setup-node
+        nvm use
+        yarn install
+        cd $DIR
 
-    # - name: Read package.json
-    #   id: package-json
-    #   shell: bash
-    #   run: |
-    #     # Read package.json to see if lint and test are runnable scripts
-    #     LINT="false"
-    #     TEST="false"
-    #     if [[ "$(jq .scripts.lint? package.json)" != "null" ]]; then LINT="true"; fi
-    #     if [[ "$(jq .scripts.test? package.json)" != "null" ]]; then TEST="true"; fi
-    #     echo "lint=$LINT" >> "$GITHUB_OUTPUT"
-    #     echo "test=$TEST" >> "$GITHUB_OUTPUT"
-    #     echo "LINT is $LINT"
-    #     echo "TEST is $TEST"
+    # Use `yarn install` rather than `yarn upgrade` to prevent the following error:
+    # "error Outdated lockfile. Please run `yarn install` and try again."
+    - name: Update yarn.lock
+      shell: bash
+      run: |
+        if [[ -f yarn.lock ]]; then
+          rm yarn.lock
+        fi
+        nvm use
+        yarn install
 
-    # # The following 3 steps make up `yarn build`
-    # # Splitting apart to make it easier to see where any failures originate from
-    # - name: Yarn lint
-    #   if: steps.package-json.outputs.lint == 'true'
-    #   shell: bash
-    #   run: |
-    #     yarn lint
+    - name: Read package.json
+      id: package-json
+      shell: bash
+      run: |
+        # Read package.json to see if lint and test are runnable scripts
+        LINT="false"
+        TEST="false"
+        if [[ "$(jq .scripts.lint? package.json)" != "null" ]]; then LINT="true"; fi
+        if [[ "$(jq .scripts.test? package.json)" != "null" ]]; then TEST="true"; fi
+        echo "lint=$LINT" >> "$GITHUB_OUTPUT"
+        echo "test=$TEST" >> "$GITHUB_OUTPUT"
+        echo "LINT is $LINT"
+        echo "TEST is $TEST"
 
-    # - name: Yarn test
-    #   if: steps.package-json.outputs.test == 'true'
-    #   shell: bash
-    #   run: |
-    #     yarn test
+    # The following 3 steps make up `yarn build`
+    # Splitting apart to make it easier to see where any failures originate from
+    - name: Yarn lint
+      if: steps.package-json.outputs.lint == 'true'
+      shell: bash
+      run: |
+        yarn lint
 
-    # - name: Build JS with webpack
-    #   # always run this and subsequent steps even if yarn.lint/yarn.test fails so that pull-request is
-    #   # created which will result in a red pull-request build so it's easy to see where things are at
+    - name: Yarn test
+      if: steps.package-json.outputs.test == 'true'
+      shell: bash
+      run: |
+        yarn test
+
+    - name: Build JS
+      # always run this and subsequent steps even if yarn.lint/yarn.test fails so that pull-request is
+      # created which will result in a red pull-request build so it's easy to see where things are at
+      if: always()
+      shell: bash
+      run: |
+        if [[ -f node_modules/.bin/webpack ]]; then
+          NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
+        else
+          yarn build
+        fi
+
+    # - name: Remove any old pull-requests
     #   if: always()
     #   shell: bash
+    #   env:
+    #     GITHUB_REPOSITORY: ${{ github.repository }}
     #   run: |
-    #     NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
+    #     # https://docs.github.com/en/rest/pulls/pulls#list-pull-requests
+    #     RESP_CODE=$(curl -w %{http_code} -s -o __response.json \
+    #     -X GET https://api.github.com/repos/$GITHUB_REPOSITORY/pulls \
+    #     -H "Accept: application/vnd.github.v3+json")
+    #     if [[ $RESP_CODE != "200" ]]; then
+    #       echo "Unable to list pull-requests - HTTP response code was $RESP_CODE"
+    #       exit 1
+    #     fi
+    #     JSON=$(cat __response.json)
+    #     rm __response.json
+    #     NUMBERS=$(echo $JSON | jq '.[] | select(.title=="DEP Update JS dependencies" and .user.login=="github-actions[bot]") | .number')
+    #     for NUMBER in $NUMBERS; do
+    #       # https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
+    #       RESP_CODE=$(curl -w %{http_code} -s -o /dev/null \
+    #       -X PATCH https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$NUMBER \
+    #       -H "Accept: application/vnd.github.v3+json" \
+    #       -H "Authorization: token ${{ github.token }}" \
+    #       -d @- << EOF
+    #       {
+    #         "state": "closed"
+    #       }
+    #     EOF
+    #       )
+    #       if [[ $RESP_CODE != "200" ]]; then
+    #         echo "Unable to close pull-request $NUMBER - HTTP response code was $RESP_CODE"
+    #         exit 1
+    #       fi
+    #       echo "Closed old pull-request $NUMBER"
+    #     done
 
-    - name: Make something to commit
-      shell: bash
-      run: |
-        echo "." >> README.md
+    # - name: Remove any old branches
+    #   if: always()
+    #   shell: bash
+    #   env:
+    #     GITHUB_REPOSITORY: ${{ github.repository }}
+    #   run: |
+    #     # Gets all branches from GitHub API
+    #     # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
+    #     RESP_CODE=$(curl -w %{http_code} -s -o __branches.json \
+    #     -X GET "https://api.github.com/repos/$GITHUB_REPOSITORY/branches?per_page=100" \
+    #     -H "Accept: application/vnd.github+json" \
+    #     -H "Authorization: Bearer ${{ github.token }}" \
+    #     -H "X-GitHub-Api-Version: 2022-11-28" \
+    #     )
+    #     if [[ $RESP_CODE != "200" ]]; then
+    #       echo "Unable to read list of branches - HTTP response code was $RESP_CODE"
+    #       cat __branches.json
+    #       exit 1
+    #     fi
+    #     BRANCHES=$(cat __branches.json | jq -r '.[] | .name | select(.|test("^pulls\/[0-9]\/update-js-[0-9]{10}$"))')
+    #     for BRANCH in $BRANCHES; do
+    #       if [[ "$BRANCH" =~ ^pulls/[0-9\.]+/update\-js\-[0-9]+$ ]]; then
+    #         git push origin --delete "$BRANCH"
+    #         echo "Deleted old branch $BRANCH"
+    #       fi
+    #     done
 
-    - name: Remove any old pull-requests
-      if: always()
-      shell: bash
-      env:
-        GITHUB_REPOSITORY: ${{ github.repository }}
-      run: |
-        # https://docs.github.com/en/rest/pulls/pulls#list-pull-requests
-        RESP_CODE=$(curl -w %{http_code} -s -o __response.json \
-        -X GET https://api.github.com/repos/$GITHUB_REPOSITORY/pulls \
-        -H "Accept: application/vnd.github.v3+json")
-        if [[ $RESP_CODE != "200" ]]; then
-          echo "Unable to list pull-requests - HTTP response code was $RESP_CODE"
-          exit 1
-        fi
-        JSON=$(cat __response.json)
-        rm __response.json
-        NUMBERS=$(echo $JSON | jq '.[] | select(.title=="DEP Update JS dependencies" and .user.login=="github-actions[bot]") | .number')
-        for NUMBER in $NUMBERS; do
-          # https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
-          RESP_CODE=$(curl -w %{http_code} -s -o /dev/null \
-          -X PATCH https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$NUMBER \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${{ github.token }}" \
-          -d @- << EOF
-          {
-            "state": "closed"
-          }
-        EOF
-          )
-          if [[ $RESP_CODE != "200" ]]; then
-            echo "Unable to close pull-request $NUMBER - HTTP response code was $RESP_CODE"
-            exit 1
-          fi
-          echo "Closed old pull-request $NUMBER"
-        done
+    # - name: Delete temporary files
+    #   shell: bash
+    #   if: always()
+    #   run: |
+    #     if [[ -f __branches.json ]]; then
+    #       rm __branches.json
+    #     fi
 
-    - name: Remove any old branches
-      if: always()
-      shell: bash
-      env:
-        GITHUB_REPOSITORY: ${{ github.repository }}
-      run: |
-        # Gets all branches from GitHub API
-        # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
-        RESP_CODE=$(curl -w %{http_code} -s -o __branches.json \
-        -X GET "https://api.github.com/repos/$GITHUB_REPOSITORY/branches?per_page=100" \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer ${{ github.token }}" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        )
-        if [[ $RESP_CODE != "200" ]]; then
-          echo "Unable to read list of branches - HTTP response code was $RESP_CODE"
-          cat __branches.json
-          exit 1
-        fi
-        BRANCHES=$(cat __branches.json | jq -r '.[] | .name | select(.|test("^pulls\/[0-9]\/update-js-[0-9]{10}$"))')
-        for BRANCH in $BRANCHES; do
-          if [[ "$BRANCH" =~ ^pulls/[0-9\.]+/update\-js\-[0-9]+$ ]]; then
-            git push origin --delete "$BRANCH"
-            echo "Deleted old branch $BRANCH"
-          fi
-        done
+    # - name: Generate branch name
+    #   if: always()
+    #   id: generate-branch-name
+    #   shell: bash
+    #   env:
+    #     GITHUB_REF: ${{ github.ref }}
+    #   run: |
+    #     # Convert refs/heads/mybranch to mybranch
+    #     CUT=$(echo $GITHUB_REF | cut -c 12-)
+    #     # e.g. pulls/1/update-js-1647810133
+    #     BRANCH=pulls/$CUT/update-js-$(date +%s)
+    #     echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
-    - name: Delete temporary files
-      shell: bash
-      if: always()
-      run: |
-        if [[ -f __branches.json ]]; then
-          rm __branches.json
-        fi
-
-    - name: Generate branch name
-      if: always()
-      id: generate-branch-name
-      shell: bash
-      env:
-        GITHUB_REF: ${{ github.ref }}
-      run: |
-        # Convert refs/heads/mybranch to mybranch
-        CUT=$(echo $GITHUB_REF | cut -c 12-)
-        # e.g. pulls/1/update-js-1647810133
-        BRANCH=pulls/$CUT/update-js-$(date +%s)
-        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-
-    - name: Git
-      if: always()
-      # uses: silverstripe/gha-pull-request@v1
-      uses: emteknetnz/gha-pull-request@main
-      with:
-        branch: ${{ steps.generate-branch-name.outputs.branch }}
-        title: DEP Update JS dependencies
-        description: Automated yarn upgrade and yarn build
+    # - name: Git
+    #   if: always()
+    #   uses: silverstripe/gha-pull-request@v1
+    #   with:
+    #     branch: ${{ steps.generate-branch-name.outputs.branch }}
+    #     title: DEP Update JS dependencies
+    #     description: Automated yarn upgrade and yarn build
