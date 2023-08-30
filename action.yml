@@ -19,21 +19,17 @@ runs:
     #   with:
     #     node-version: ${{ steps.read-nvm.outputs.version }}
 
-    - name: Install nvm
-      shell: bash
-      run: |
-        curl -sL https://raw.githubusercontent.com/nvm-sh/nvm/v0.35.0/install.sh -o install_nvm.sh
-        if [[ $(sha1sum install_nvm.sh) != "2b5f64ec70c66ffa04946773673c424136ea75c5  install_nvm.sh" ]]; then
-          echo "sha1sum of install_nvm.sh does not match"
-          exit 1
-        fi
-        . install_nvm.sh
-        export NVM_DIR="$HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        # todo remove
-        echo "which nvm 2 is"
-        which nvm
-        #
+    # - name: Install nvm
+    #   shell: bash
+    #   run: |
+    #     curl -sL https://raw.githubusercontent.com/nvm-sh/nvm/v0.35.0/install.sh -o install_nvm.sh
+    #     if [[ $(sha1sum install_nvm.sh) != "2b5f64ec70c66ffa04946773673c424136ea75c5  install_nvm.sh" ]]; then
+    #       echo "sha1sum of install_nvm.sh does not match"
+    #       exit 1
+    #     fi
+    #     . install_nvm.sh
+    #     export NVM_DIR="$HOME/.nvm"
+    #     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
     - name: Install admin JS
       if: github.event.repository.name != 'silverstripe-admin'
@@ -45,8 +41,9 @@ runs:
         git clone https://github.com/silverstripe/silverstripe-admin.git admin
         # Assumption is that the default branch of admin is the correct one to build against
         cd admin
-        # yarn comes preinstalled with actions/setup-node
+        # nvm comes preinstalled with github actions
         nvm use
+        # does yarn??
         yarn install
         cd $DIR
 
