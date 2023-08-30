@@ -42,7 +42,12 @@ runs:
         cd admin
         # Need to run this to make nvm available in the current directory
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        nvm use
+        if ! [[ -f .nvmrc ]]; then
+          echo "No .nvmrc file found in admin"
+          exit 1
+        fi
+        nvm install $(cat .nvmrc)
+        nvm use $(cat .nvmrc)
         npm install --global yarn
         yarn install
         cd $DIR
@@ -58,7 +63,12 @@ runs:
         # Run nvm use and install yarn again for edge cases where the module is still on node 10, while admin is on node 18
         # Need to run this to make nvm available in the current directory
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        nvm use
+        if ! [[ -f .nvmrc ]]; then
+          echo "No .nvmrc file found in repository"
+          exit 1
+        fi
+        nvm install $(cat .nvmrc)
+        nvm use $(cat .nvmrc)
         npm install --global yarn
         yarn install
 
