@@ -19,6 +19,13 @@ runs:
       with:
         node-version: ${{ steps.read-nvm.outputs.version }}
 
+    - name: Make artifacts directory
+      shell: bash
+      run: |
+        # Create the directory for artifacts one level up from the checkout directory so that we do not commit
+        # the artifacts to the repository
+        mkdir ../_artifacts
+
     - name: Output versions
       shell: bash
       run: |
@@ -186,8 +193,16 @@ runs:
       shell: bash
       run: |
         if [[ -f package.json ]]; then
-          cp package.json artifacts
+          cp package.json ../_artifacts
         fi
         if [[ -f yarn.lock ]]; then
-          cp yarn.lock artifacts
+          cp yarn.lock ../_artifacts
         fi
+
+    # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
+    - name: Upload artifacts
+      uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # @v3.1.2
+      if: always()
+      with:
+        name: ${{ env.artifacts_name }}
+        path: ../_artifacts
