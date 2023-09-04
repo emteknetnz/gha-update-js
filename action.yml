@@ -25,6 +25,8 @@ runs:
         # Note: creating the directory for artifacts one level up from the checkout directory so that we do not commit
         # the artifacts to the repository is not allowed by actions/upload-artifact
         mkdir __artifacts
+        # Ensure there will always at least one file in the archive so that there are no issues creating it
+        touch __artifacts/placeholder
 
     - name: Output versions
       shell: bash
@@ -163,11 +165,17 @@ runs:
       if: always()
       shell: bash
       run: |
+        AT_LEAST_ONE_FILE=0
         if [[ -f package.json ]]; then
           cp package.json __artifacts
+          AT_LEAST_ONE_FILE=1
         fi
         if [[ -f yarn.lock ]]; then
           cp yarn.lock __artifacts
+          AT_LEAST_ONE_FILE=1
+        fi
+        if [[ $AT_LEAST_ONE_FILE == 1 ]]; then
+          rm __artifacts/placeholder
         fi
 
     # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
