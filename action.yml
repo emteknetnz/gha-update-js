@@ -19,12 +19,12 @@ runs:
       with:
         node-version: ${{ steps.read-nvm.outputs.version }}
 
-    - name: Make artifacts directory
+    - name: Create temporary artifacts directory
       shell: bash
       run: |
-        # Create the directory for artifacts one level up from the checkout directory so that we do not commit
-        # the artifacts to the repository
-        mkdir ../_artifacts
+        # Note: creating the directory for artifacts one level up from the checkout directory so that we do not commit
+        # the artifacts to the repository is not allowed by actions/upload-artifact
+        mkdir __artifacts
 
     - name: Output versions
       shell: bash
@@ -159,10 +159,30 @@ runs:
           fi
         done
 
+    - name: Copy artifacts
+      if: always()
+      shell: bash
+      run: |
+        if [[ -f package.json ]]; then
+          cp package.json __artifacts
+        fi
+        if [[ -f yarn.lock ]]; then
+          cp yarn.lock __artifacts
+        fi
+
+    # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
+    - name: Upload artifacts
+      uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # @v3.1.2
+      if: always()
+      with:
+        name: artifacts
+        path: __artifacts
+
     - name: Delete temporary files
       shell: bash
       if: always()
       run: |
+        rm -rf __artifacts
         if [[ -f __branches.json ]]; then
           rm __branches.json
         fi
@@ -187,22 +207,3 @@ runs:
         branch: ${{ steps.generate-branch-name.outputs.branch }}
         title: DEP Update JS dependencies
         description: Automated yarn upgrade and yarn build
-
-    - name: Copy artifacts
-      if: always()
-      shell: bash
-      run: |
-        if [[ -f package.json ]]; then
-          cp package.json ../_artifacts
-        fi
-        if [[ -f yarn.lock ]]; then
-          cp yarn.lock ../_artifacts
-        fi
-
-    # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
-    - name: Upload artifacts
-      uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # @v3.1.2
-      if: always()
-      with:
-        name: ${{ env.artifacts_name }}
-        path: ../_artifacts
