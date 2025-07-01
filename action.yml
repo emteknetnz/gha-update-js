@@ -70,14 +70,14 @@ runs:
           rm __repositories.json
           exit 1
         fi
-        SUPPORTED_FRAMEWORK_MAJOR=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
+        FRAMEWORK_SUPPORTED_MAJOR=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
         rm __repositories.json
-        if ! [[ "$SUPPORTED_FRAMEWORK_MAJOR" =~ ^[0-9]+$ ]]; then
-          echo "SUPPORTED_FRAMEWORK_MAJOR '$SUPPORTED_FRAMEWORK_MAJOR' is not a valid int"
+        if ! [[ "$FRAMEWORK_SUPPORTED_MAJOR" =~ ^[0-9]+$ ]]; then
+          echo "FRAMEWORK_SUPPORTED_MAJOR '$FRAMEWORK_SUPPORTED_MAJOR' is not a valid int"
           exit 1
         fi
-        echo "SUPPORTED_FRAMEWORK_MAJOR is $SUPPORTED_FRAMEWORK_MAJOR"
-        echo "supported_framework_major=$SUPPORTED_FRAMEWORK_MAJOR" >> "$GITHUB_OUTPUT"
+        echo "FRAMEWORK_SUPPORTED_MAJOR is $FRAMEWORK_SUPPORTED_MAJOR"
+        echo "framework_supported_major=$FRAMEWORK_SUPPORTED_MAJOR" >> "$GITHUB_OUTPUT"
         # Make a GitHub API call to branches endpoint for silverstripe/silverstripe-framework
         RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
           -H "Accept: application/vnd.github+json" \
@@ -92,7 +92,7 @@ runs:
           exit 1
         fi
         # Get the highest supported framework minor branch
-        FRAMEWORK_HIGHEST_MINOR=$(jq -r --arg supported_framework_major "$SUPPORTED_FRAMEWORK_MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1]) | .[-1]' __branches.json  | cut -d'.' -f2)
+        FRAMEWORK_HIGHEST_MINOR=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1]) | .[-1]' __branches.json  | cut -d'.' -f2)
         rm __branches.json
         echo "FRAMEWORK_HIGHEST_MINOR is $FRAMEWORK_HIGHEST_MINOR"
         echo "framework_highest_minor=$FRAMEWORK_HIGHEST_MINOR" >> "$GITHUB_OUTPUT"      
@@ -110,7 +110,7 @@ runs:
         fi
         # Check if there is y.2.0 tag for the current supported major version of framework
         FRAMEWORK_TWO_TAG_EXISTS=0
-        TWO_TAG=$(jq -r --arg supported_framework_major "$SUPPORTED_FRAMEWORK_MAJOR" '.[] | select(.name == $supported_framework_major + ".2.0")' __tags.json)
+        TWO_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".2.0")' __tags.json)
         if ! [[ -z $TWO_TAG ]]; then
           FRAMEWORK_TWO_TAG_EXISTS=1
         fi
@@ -118,7 +118,7 @@ runs:
         echo "framework_two_tag_exists=$FRAMEWORK_TWO_TAG_EXISTS" >> "$GITHUB_OUTPUT"
         # Check if there is y.4.0 tag for the current supported major version of framework
         FOUR_TAG_EXISTS=0
-        FOUR_TAG=$(jq -r --arg supported_framework_major "$SUPPORTED_FRAMEWORK_MAJOR" '.[] | select(.name == $supported_framework_major + ".4.0")' __tags.json)
+        FOUR_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".4.0")' __tags.json)
         if ! [[ -z $FOUR_TAG ]]; then
           FRAMEWORK_FOUR_TAG_EXISTS=1
         fi
@@ -133,18 +133,18 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
-        SUPPORTED_FRAMEWORK_MAJOR: ${{ steps.derive-supported-framwork.outputs.supported_framework_major }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-supported-framwork.outputs.framework_supported_major }}
         FRAMEWORK_TWO_TAG_EXISTS: ${{ steps.derive-supported-framwork.outputs.framework_two_tag_exists }}
         FRAMEWORK_FOUR_TAG_EXISTS: ${{ steps.derive-supported-framwork.outputs.framework_four_tag_exists }}
       run: |
-        # $DEFAULT_BRANCH is always assumed to be a numeric value i.e. not "main", and is assumed to be the same CMS version as $SUPPORTED_FRAMEWORK_MAJOR
+        # $DEFAULT_BRANCH is always assumed to be a numeric value i.e. not "main", and is assumed to be the same CMS version as $FRAMEWORK_SUPPORTED_MAJOR
         # It's always assumed that this action is run every six months, and at least one month from a minor beta release
         # meaning that whenever we get the highest minor branch for the current minor, that minor branch will currently be stable
         echo "DEFAULT_BRANCH is $DEFAULT_BRANCH"
         MAJOR=""
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
           if [[ $FRAMEWORK_TWO_TAG_EXISTS == "1" ]]; then
-            echo "Because framework tag $SUPPORTED_FRAMEWORK_MAJOR.2.0 exists, the 'prev-major-curr-minor' run type is no longer supported"
+            echo "Because framework tag $FRAMEWORK_SUPPORTED_MAJOR.2.0 exists, the 'prev-major-curr-minor' run type is no longer supported"
             exit 0
           fi
           MAJOR=$((DEFAULT_BRANCH - 1))
@@ -152,7 +152,7 @@ runs:
           MAJOR="$DEFAULT_BRANCH"
         elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
           if [[ $FRAMEWORK_FOUR_TAG_EXISTS == "1" ]]; then
-            echo "Because framework tag $SUPPORTED_FRAMEWORK_MAJOR.4.0 exists, the 'curr-major-next-minor' run type should not create create a pull-request"
+            echo "Because framework tag $FRAMEWORK_SUPPORTED_MAJOR.4.0 exists, the 'curr-major-next-minor' run type should not create create a pull-request"
             exit 0
           fi
           MODULE_BRANCH="$DEFAULT_BRANCH"
@@ -187,17 +187,17 @@ runs:
       shell: bash
       env:
         BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
-        SUPPORTED_FRAMEWORK_MAJOR: ${{ steps.derive-highest-supported-framwork-major.outputs.supported_framework_major }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-highest-supported-framwork-major.outputs.framework_supported_major }}
         FRAMEWORK_HIGHEST_MINOR: ${{ steps.derive-supported-framwork.outputs.framework_highest_minor }}
       run: |
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
-          ADMIN_MAJOR=$((SUPPORTED_FRAMEWORK_MAJOR - 4))
+          ADMIN_MAJOR=$((FRAMEWORK_SUPPORTED_MAJOR - 4))
           ADMIN_BRANCH="$ADMIN_MAJOR.4"
         elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
-          ADMIN_MAJOR=$((SUPPORTED_FRAMEWORK_MAJOR - 3))
+          ADMIN_MAJOR=$((FRAMEWORK_SUPPORTED_MAJOR - 3))
           ADMIN_BRANCH="$ADMIN_MAJOR.$FRAMEWORK_HIGHEST_MINOR"
         elif [[ "$BRANCH_TYPE" == 'curr-major-next-minor' ]]; then
-          ADMIN_BRANCH=$((SUPPORTED_FRAMEWORK_MAJOR - 3))
+          ADMIN_BRANCH=$((FRAMEWORK_SUPPORTED_MAJOR - 3))
         fi
         if ! [[ "$ADMIN_BRANCH" =~ ^[0-9]+$ ]] && ! [[ "$ADMIN_BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]; then
           echo "ADMIN_BRANCH '$ADMIN_BRANCH' is non-numeric"
