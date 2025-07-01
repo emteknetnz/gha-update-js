@@ -92,7 +92,7 @@ runs:
           exit 1
         fi
         # Get the highest supported framework minor branch
-        FRAMEWORK_HIGHEST_MINOR=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '[ .[] | select(.name | test("^" + $framework_supported_major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1]) | .[-1]' __branches.json  | cut -d'.' -f2)
+        FRAMEWORK_HIGHEST_MINOR=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '[ .[] | select(.name | test("^" + $framework_supported_major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json  | cut -d'.' -f2)
         rm __branches.json
         echo "FRAMEWORK_HIGHEST_MINOR is $FRAMEWORK_HIGHEST_MINOR"
         echo "framework_highest_minor=$FRAMEWORK_HIGHEST_MINOR" >> "$GITHUB_OUTPUT"      
@@ -109,7 +109,7 @@ runs:
           exit 1
         fi
         # Check if there is y.2.0 tag for the current supported major version of framework
-        FRAMEWORK_TWO_TAG_EXISTS=0
+        FRAMEWORK_TWO_TAG_EXISTS=
         TWO_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".2.0")' __tags.json)
         if ! [[ -z $TWO_TAG ]]; then
           FRAMEWORK_TWO_TAG_EXISTS=1
@@ -117,13 +117,13 @@ runs:
         echo "FRAMEWORK_TWO_TAG_EXISTS is $FRAMEWORK_TWO_TAG_EXISTS"
         echo "framework_two_tag_exists=$FRAMEWORK_TWO_TAG_EXISTS" >> "$GITHUB_OUTPUT"
         # Check if there is y.4.0 tag for the current supported major version of framework
-        FOUR_TAG_EXISTS=0
+        FRAMEWORK_FOUR_TAG_EXISTS=0
         FOUR_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".4.0")' __tags.json)
         if ! [[ -z $FOUR_TAG ]]; then
           FRAMEWORK_FOUR_TAG_EXISTS=1
         fi
         echo "FRAMEWORK_FOUR_TAG_EXISTS is $FRAMEWORK_FOUR_TAG_EXISTS"
-        echo "fraework_four_tag_exists=$FRAMEWORK_FOUR_TAG_EXISTS" >> "$GITHUB_OUTPUT"
+        echo "framework_four_tag_exists=$FRAMEWORK_FOUR_TAG_EXISTS" >> "$GITHUB_OUTPUT"
         rm __tags.json
 
     - name: Derive module branch
@@ -171,7 +171,7 @@ runs:
             exit 1
           fi
           # Find the highest minor branch for major
-          HIGHEST_MINOR=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1]) | .[-1]' __branches.json | cut -d'.' -f2)
+          HIGHEST_MINOR=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json | cut -d'.' -f2)
           rm __branches.json
           MODULE_BRANCH="$MAJOR.$HIGHEST_MINOR"
         fi
