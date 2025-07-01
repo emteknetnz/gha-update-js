@@ -53,29 +53,8 @@ runs:
         echo "BRANCH_TYPE is $BRANCH_TYPE"
         echo "branch_type=$BRANCH_TYPE" >> "$GITHUB_OUTPUT"
 
-      - name: Derive PHP version
-        id: derive-php-version
-        shell: bash
-        run: |
-          PHP_VERSION=$(jq -r '.require."php"' composer.json | sed -E 's/[^0-9]*([0-9\.]+)$/\1/')
-          # Validate if PHP_VERSION is numeric
-          if ! [[ "$PHP_VERSION" =~ ^[0-9\.]+$ ]]; then
-            echo "PHP_VERSION '$PHP_VERSION' from composer.json is non-numeric"
-            exit 1
-          fi
-          echo "PHP_VERSION is $PHP_VERSION"
-          echo "php_version=$PHP_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Install PHP with composer
-        # SHA will need to be updated to support new php version when they are released
-        uses: shivammathur/setup-php@c541c155eee45413f5b09a52248675b1a2575231 # v2.31.1
-        with:
-          php-version: ${{ steps.derive-php-version.outputs.php_version }}
-          extensions: curl, dom, gd, intl, json, ldap, mbstring, mysql, tidy, xdebug, zip
-          tools: composer:v2
-
-    - name: Derive highest supported framework major version
-      id: derive-highest-supported-framwork-major-version
+    - name: Derive supported framework
+      id: derive-supported-framwork
       shell: bash
       run: |
         RESP_CODE=$(curl -w %{http_code} -s -L -o __repositories.json \
@@ -90,73 +69,76 @@ runs:
           rm __repositories.json
           exit 1
         fi
-        SUPPORTED_FRAMEWORK_VERSION=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
+        SUPPORTED_FRAMEWORK_MAJOR=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
         rm __repositories.json
-        if ! [[ "$SUPPORTED_FRAMEWORK_VERSION" =~ ^[0-9]+$ ]]; then
-          echo "SUPPORTED_FRAMEWORK_VERSION '$SUPPORTED_FRAMEWORK_VERSION' is not a valid int"
+        if ! [[ "$SUPPORTED_FRAMEWORK_MAJOR" =~ ^[0-9]+$ ]]; then
+          echo "SUPPORTED_FRAMEWORK_MAJOR '$SUPPORTED_FRAMEWORK_MAJOR' is not a valid int"
           exit 1
         fi
-        echo "SUPPORTED_FRAMEWORK_VERSION is $SUPPORTED_FRAMEWORK_VERSION"
-        echo "supported_framework_version=$SUPPORTED_FRAMEWORK_VERSION" >> "$GITHUB_OUTPUT"
-
-    - name: Derive module framework major version
-      id: derive-module-framwork-major-version
-      shell: bash
-      run: |
-        composer require silverstripe/framework --no-install
-        MODULE_FRAMEWORK_VERSION=$(jq -r '.require."silverstripe/framework"' composer.json | sed -E 's/[^0-9]*([0-9]+).*$/\1/')
-        composer remove silverstripe/framework --no-install
-        rm composer.lock
-        if ! [[ "$MODULE_FRAMEWORK_VERSION" =~ ^[0-9]+$ ]]; then
-          echo "MODULE_FRAMEWORK_VERSION '$MODULE_FRAMEWORK_VERSION' is not a valid int"
+        echo "SUPPORTED_FRAMEWORK_MAJOR is $SUPPORTED_FRAMEWORK_MAJOR"
+        echo "supported_framework_major=$SUPPORTED_FRAMEWORK_MAJOR" >> "$GITHUB_OUTPUT"
+        # Make a GitHub API call to tags endpoint for silverstripe/silverstripe-framework
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __tags.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/silverstripe/silverstripe-framework/tags
+        )
+        if [[ $RESP_CODE != "200" ]]; then
+          echo "Failed to get list of tags - HTTP response code was $RESP_CODE"
+          cat __tags.json
           exit 1
         fi
-        echo "MODULE_FRAMEWORK_VERSION is $MODULE_FRAMEWORK_VERSION"
-        echo "module_framework_version=$MODULE_FRAMEWORK_VERSION" >> "$GITHUB_OUTPUT"
+        # Check if there is y.2.0 tag for the current supported major version of framework
+        FRAMEWORK_TWO_TAG_EXISTS=0
+        TWO_TAG=$(jq -r --arg supported_framework_major "$SUPPORTED_FRAMEWORK_MAJOR" '.[] | select(.name == $supported_framework_major + ".2.0")' __tags.json)
+        if ! [[ -z $TWO_TAG ]]; then
+          FRAMEWORK_TWO_TAG_EXISTS=1
+        fi
+        echo "FRAMEWORK_TWO_TAG_EXISTS is $FRAMEWORK_TWO_TAG_EXISTS"
+        echo "framework_two_tag_exists=$FRAMEWORK_TWO_TAG_EXISTS" >> "$GITHUB_OUTPUT"
+        # Check if there is y.4.0 tag for the current supported major version of framework
+        FOUR_TAG_EXISTS=0
+        FOUR_TAG=$(jq -r --arg supported_framework_major "$SUPPORTED_FRAMEWORK_MAJOR" '.[] | select(.name == $supported_framework_major + ".4.0")' __tags.json)
+        if ! [[ -z $FOUR_TAG ]]; then
+          FRAMEWORK_FOUR_TAG_EXISTS=1
+        fi
+        echo "FRAMEWORK_FOUR_TAG_EXISTS is $FRAMEWORK_FOUR_TAG_EXISTS"
+        echo "fraework_four_tag_exists=$FRAMEWORK_FOUR_TAG_EXISTS" >> "$GITHUB_OUTPUT"
+        rm __tags.json
 
-    - name: Derive branch
-      id: derive-branch
+    - name: Derive module branch
+      id: derive-module-branch
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
-        SUPPORTED_FRAMEWORK_VERSION: ${{ steps.derive-highest-supported-framwork-major-version.outputs.supported_framework_version }}
-        MODULE_FRAMEWORK_VERSION: ${{ steps.derive-module-framwork-major-version.module_framework_version }}
+        SUPPORTED_FRAMEWORK_MAJOR: ${{ steps.derive-supported-framwork.outputs.supported_framework_major }}}}
+        FRAMEWORK_TWO_TAG_EXISTS: ${{ steps.derive-supported-framwork.outputs.framework_two_tag_exists }}}}
+        FRAMEWORK_FOUR_TAG_EXISTS: ${{ steps.derive-supported-framwork.outputs.framework_four_tag_exists }}
       run: |
-        # DEFAULT_BRANCH is always assumed to be a numeric value i.e. not "main"
+        # $DEFAULT_BRANCH is always assumed to be a numeric value i.e. not "main", and is assumed to be the same CMS version as $SUPPORTED_FRAMEWORK_MAJOR
         # It's always assumed that this action is run every six months, and at least one month from a minor beta release
         # meaning that whenever we get the highest minor branch for the current minor, that minor branch will currently be stable
+        echo "DEFAULT_BRANCH is $DEFAULT_BRANCH"
         MAJOR=""
-        if [[ "$BRANCH_TYPE" == 'curr-major-next-minor' ]]; then
-          BRANCH="$DEFAULT_BRANCH"
-        elif [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
-          # Make a GitHub API call to tags endpoint for silverstripe/silverstripe-framework checking to see if there is
-          # a $SUPPORTED_FRAMEWORK_VERSION.2.0 tag, and if so then exit 0 saying no longer supported
-          RESP_CODE=$(curl -w %{http_code} -s -L -o __tags.json \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/silverstripe/silverstripe-framework/tags
-          )
-          if [[ $RESP_CODE != "200" ]]; then
-            echo "Failed to get list of tags - HTTP response code was $RESP_CODE"
-            cat __tags.json
-            exit 1
-          fi
-          # Check if there is y.2.0 tag for the current version of framework
-          TWO_MINOR_TAG_EXISTS=$(jq -r --arg supported_framework_version "$SUPPORTED_FRAMEWORK_VERSION" '.[] | select(.name == $supported_framework_version + ".2.0")' __tags.json)
-          if ! [[ -z $TWO_MINOR_TAG_EXISTS ]]; then
-            rm __tags.json
-            echo "A $SUPPORTED_FRAMEWORK_VERSION.2.0 tag exist for silverstripe/framework, therefore the prev-major-curr-minor version of the repo is no longer supported"
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
+          if [[ $FRAMEWORK_TWO_TAG_EXISTS == "1" ]]; then
+            echo "Because framework tag $SUPPORTED_FRAMEWORK_MAJOR.2.0 exists, the 'prev-major-curr-minor' run type is no longer supported"
             exit 0
           fi
-          rm __tags.json
           MAJOR=$((DEFAULT_BRANCH - 1))
-        elif [[ "$BRANCH_TYPE" == 'curr-major-curr-minor' ]]; then
+        elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
           MAJOR="$DEFAULT_BRANCH"
+        elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
+          if [[ $FRAMEWORK_FOUR_TAG_EXISTS == "1" ]]; then
+            echo "Because framework tag $SUPPORTED_FRAMEWORK_MAJOR.4.0 exists, the 'curr-major-next-minor' run type should not create create a pull-request"
+            exit 0
+          fi
+          MODULE_BRANCH="$DEFAULT_BRANCH"
         fi
-        if [[ $MAJOR != "" ]];
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]] || [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
           # Make a GitHub API call to get branches for the current repo
           RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
             -H "Accept: application/vnd.github+json" \
@@ -170,20 +152,43 @@ runs:
             exit 1
           fi
           # Find the highest minor branch for major
-          BRANCH=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1]) | .[-1]' __branches.json)
+          HIGHEST_MINOR=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1]) | .[-1]' __branches.json | | cut -d'.' -f2)
           rm __branches.json
+          MODULE_BRANCH="$MAJOR.$HIGHEST_MINOR"
         fi
-        if ! [[ "$BRANCH" =~ ^[0-9]+$ ]] ! [[ "$BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]&& ; then
-          echo "BRANCH '$BRANCH' is non-numeric"
+        if ! [[ "$MODULE_BRANCH" =~ ^[0-9]+$ ]] && ! [[ "$MODULE_BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "MODULE_BRANCH '$MODULE_BRANCH' is non-numeric"
           exit 1
         fi
-        echo "BRANCH is $BRANCH"
-        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+        echo "MODULE_BRANCH is $MODULE_BRANCH"
+        echo "module_branch=$MODULE_BRANCH" >> "$GITHUB_OUTPUT"
+
+    - name: Derive admin branch
+      id: derive-admin-branch
+      shell: bash
+      env:
+        BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
+        SUPPORTED_FRAMEWORK_MAJOR: ${{ steps.derive-highest-supported-framwork-major.outputs.supported_framework_major }}
+      run: |
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
+          MAJOR=$((SUPPORTED_FRAMEWORK_MAJOR - 4))
+          ADMIN_BRANCH="$MAJOR.4"
+        elif [[ "$BRANCH_TYPE" == 'curr-major-next-minor' ]]; then
+          ADMIN_BRANCH=$((SUPPORTED_FRAMEWORK_MAJOR - 3))
+        elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
+          # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        fi
+        if ! [[ "$ADMIN_BRANCH" =~ ^[0-9]+$ ]] && ! [[ "$ADMIN_BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "ADMIN_BRANCH '$ADMIN_BRANCH' is non-numeric"
+          exit 1
+        fi
+        echo "ADMIN_BRANCH is $ADMIN_BRANCH"
+        echo "admin_branch=$ADMIN_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Checkout code
       uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
       with:
-        ref: ${{ steps.derive-branch.outputs.branch }}
+        ref: ${{ steps.derive-module-branch.outputs.branch }}
 
     - name: Read .nvmrc
       id: read-nvm
