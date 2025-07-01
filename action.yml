@@ -90,7 +90,7 @@ runs:
         FRAMEWORK_HIGHEST_MINOR=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '[ .[] | select(.name | test("^" + $framework_supported_major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json  | cut -d'.' -f2)
         rm __branches.json
         echo "FRAMEWORK_HIGHEST_MINOR is $FRAMEWORK_HIGHEST_MINOR"
-        echo "framework_highest_minor=$FRAMEWORK_HIGHEST_MINOR" >> "$GITHUB_OUTPUT"      
+        echo "framework_highest_minor=$FRAMEWORK_HIGHEST_MINOR" >> "$GITHUB_OUTPUT"
         # Make a GitHub API call to tags endpoint for silverstripe/silverstripe-framework
         RESP_CODE=$(curl -w %{http_code} -s -L -o __tags.json \
           -H "Accept: application/vnd.github+json" \
