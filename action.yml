@@ -67,7 +67,6 @@ runs:
         if [[ $RESP_CODE != "200" ]]; then
           echo "Failed to fetch repositories.json - HTTP response code was $RESP_CODE"
           cat __repositories.json
-          rm __repositories.json
           exit 1
         fi
         FRAMEWORK_SUPPORTED_MAJOR=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
@@ -88,7 +87,6 @@ runs:
         if [[ $RESP_CODE != "200" ]]; then
           echo "Failed to get list of tags - HTTP response code was $RESP_CODE"
           cat __branches.json
-          rm __branches.json
           exit 1
         fi
         # Get the highest supported framework minor branch
@@ -109,7 +107,7 @@ runs:
           exit 1
         fi
         # Check if there is y.2.0 tag for the current supported major version of framework
-        FRAMEWORK_TWO_TAG_EXISTS=
+        FRAMEWORK_TWO_TAG_EXISTS=0
         TWO_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".2.0")' __tags.json)
         if ! [[ -z $TWO_TAG ]]; then
           FRAMEWORK_TWO_TAG_EXISTS=1
