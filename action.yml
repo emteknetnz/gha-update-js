@@ -53,16 +53,32 @@ runs:
         echo "BRANCH_TYPE is $BRANCH_TYPE"
         echo "branch_type=$BRANCH_TYPE" >> "$GITHUB_OUTPUT"
 
-    - name: Derive CMS major version
-      id: derive-cms-major-version
+      - name: Derive PHP version
+        id: derive-php-version
+        shell: bash
+        run: |
+          PHP_VERSION=$(jq -r '.require."php"' composer.json | sed -E 's/[^0-9]*([0-9\.]+)$/\1/')
+          echo "PHP_VERSION is $PHP_VERSION"
+          echo "php_version=$PHP_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install PHP with composer
+        # SHA will need to be updated to support new php version when they are released
+        uses: shivammathur/setup-php@c541c155eee45413f5b09a52248675b1a2575231 # v2.31.1
+        with:
+          php-version: ${{ steps.derive-php-version.outputs.php_version }}
+          extensions: curl, dom, gd, intl, json, ldap, mbstring, mysql, tidy, xdebug, zip
+          tools: composer:v2
+
+    - name: Derive framework major version
+      id: derive-framwork-major-version
       shell: bash
       run: |
-        composer require silverstripe/recipe-cms --no-install
-        CMS_MAJOR_VERSION=$(jq -r '.require."silverstripe/recipe-cms"' composer.json | sed -E 's/[^0-9]*([0-9]+).*$/\1/')
-        composer remove silverstripe/recipe-cms --no-install
+        composer require silverstripe/framework --no-install
+        CMS_MAJOR_VERSION=$(jq -r '.require."silverstripe/framework"' composer.json | sed -E 's/[^0-9]*([0-9]+).*$/\1/')
+        composer remove silverstripe/framework --no-install
         rm composer.lock
-        echo "CMS_MAJOR_VERSION is $CMS_MAJOR_VERSION"
-        echo "cms_major_version=$CMS_MAJOR_VERSION" >> "$GITHUB_OUTPUT"
+        echo "FRAMEWORK_MAJOR_VERSION is $FRAMEWORK_MAJOR_VERSION"
+        echo "framework_major_version=$FRAMEWORK_MAJOR_VERSION" >> "$GITHUB_OUTPUT"
 
     - name: Derive branch
       id: derive-branch
