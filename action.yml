@@ -171,7 +171,9 @@ runs:
             exit 1
           fi
           # Find the highest minor branch for major
+          echo "MAJOR is $MAJOR"
           HIGHEST_MINOR=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json | cut -d'.' -f2)
+          echo "HIGHEST_MINOR is $HIGHEST_MINOR"
           rm __branches.json
           MODULE_BRANCH="$MAJOR.$HIGHEST_MINOR"
         fi
