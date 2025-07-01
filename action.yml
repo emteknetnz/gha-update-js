@@ -414,23 +414,20 @@ runs:
           rm __pull_requests.json
         fi
 
-    - name: Generate branch name
+    - name: Generate pr branch name
       if: always()
-      id: generate-branch-name
+      id: generate-pr-branch-name
       shell: bash
       env:
-        GITHUB_REF: ${{ github.ref }}
+        MODULE_BRANCH: ${{ steps.derive-module-branch.outputs.module_branch }}
       run: |
-        # Convert refs/heads/mybranch to mybranch
-        CUT=$(echo $GITHUB_REF | cut -c 12-)
-        # e.g. pulls/1/update-js-1647810133
-        BRANCH=pulls/$CUT/update-js-$(date +%s)
-        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+        BRANCH=pulls/$MODULE_BRANCH/update-js-$(date +%s)
+        echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Git
       if: always()
       uses: silverstripe/gha-pull-request@v1
       with:
-        branch: ${{ steps.generate-branch-name.outputs.branch }}
+        branch: ${{ steps.generate-pr-branch-name.outputs.pr_branch }}
         title: DEP Update JS dependencies
         description: Automated yarn upgrade and yarn build
