@@ -141,7 +141,7 @@ runs:
         echo "DEFAULT_BRANCH is $DEFAULT_BRANCH"
         MAJOR=""
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
-          if [[ $FRAMEWORK_TWO_TAG_EXISTS == "1" ]]; then
+          if [[ "$FRAMEWORK_TWO_TAG_EXISTS" == "1" ]]; then
             echo "Because framework tag $FRAMEWORK_SUPPORTED_MAJOR.2.0 exists, the 'prev-major-curr-minor' run type is no longer supported"
             exit 0
           fi
@@ -149,7 +149,7 @@ runs:
         elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
           MAJOR="$DEFAULT_BRANCH"
         elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
-          if [[ $FRAMEWORK_FOUR_TAG_EXISTS == "1" ]]; then
+          if [[ "$FRAMEWORK_FOUR_TAG_EXISTS" == "1" ]]; then
             echo "Because framework tag $FRAMEWORK_SUPPORTED_MAJOR.4.0 exists, the 'curr-major-next-minor' run type should not create create a pull-request"
             exit 0
           fi
@@ -187,7 +187,7 @@ runs:
       shell: bash
       env:
         BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
-        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-highest-supported-framwork-major.outputs.framework_supported_major }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-supported-framwork.outputs.framework_supported_major }}
         FRAMEWORK_HIGHEST_MINOR: ${{ steps.derive-supported-framwork.outputs.framework_highest_minor }}
       run: |
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
