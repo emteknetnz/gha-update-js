@@ -2,7 +2,7 @@ name: Update JS
 description: Updates JS dependencies in Silverstripe core modules
 
 inputs:
-  branch:
+  branch_type:
     description: 'The base branch to create the pull request against'
     type: string
     required: true
@@ -11,20 +11,18 @@ inputs:
 runs:
   using: composite
   steps:
-
     - name: Validate inputs
       id: validate-inputs
       shell: bash
       env:
-        INPUT_BRANCH: ${{ inputs.branch }}
+        INPUT_BRANCH_TYPE: ${{ inputs.branch_type }}
       run: |
-        if [[ "$INPUT_BRANCH" != "schedule" && \
-          "$INPUT_BRANCH" != "prev-major-curr-minor" && \
-          "$INPUT_BRANCH" != "curr-major-curr-minor" && \
-          "$INPUT_BRANCH" != "curr-major-next-minor" \
+        if [[ "$INPUT_BRANCH_TYPE" != "schedule" && \
+          "$INPUT_BRANCH_TYPE" != "prev-major-curr-minor" && \
+          "$INPUT_BRANCH_TYPE" != "curr-major-curr-minor" && \
+          "$INPUT_BRANCH_TYPE" != "curr-major-next-minor" \
         ]]; then
-          echo "Invalid INPUT_BRANCH: $INPUT_BRANCH"
-          echo "Allowed values are: schedule, prev-major-curr-minor, curr-major-curr-minor, curr-major-next-minor"
+          echo "Invalid input branch_type '$INPUT_BRANCH_TYPE'"
           exit 1
         fi
 
@@ -32,9 +30,9 @@ runs:
       id: derive-branch-type
       shell: bash
       env:
-        INPUT_BRANCH: ${{ inputs.branch }}
+        INPUT_BRANCH_TYPE: ${{ inputs.branch_type }}
       run: |
-        if [[ $INPUT_BRANCH == 'schedule' ]]; then
+        if [[ $INPUT_BRANCH_TYPE == 'schedule' ]]; then
           DAY_OF_MONTH=$(date +%d)
           if [[ "$DAY_OF_MONTH" == "01" ]]; then
             BRANCH_TYPE="prev-major-curr-minor"
@@ -43,12 +41,11 @@ runs:
           elif [[ "$DAY_OF_MONTH" == "03" ]]; then
             BRANCH_TYPE="curr-major-next-minor"
           else
-            echo "Invalid DAY_OF_MONTH: DAY_OF_MONTH"
-            echo "Allowed values are: 01, 02, 03"
+            echo "Invalid DAY_OF_MONTH '$DAY_OF_MONTH'"
             exit 1
           fi
         else
-          BRANCH_TYPE="$INPUT_BRANCH"
+          BRANCH_TYPE="$INPUT_BRANCH_TYPE"
         fi
         echo "BRANCH_TYPE is $BRANCH_TYPE"
         echo "branch_type=$BRANCH_TYPE" >> "$GITHUB_OUTPUT"
