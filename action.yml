@@ -58,6 +58,11 @@ runs:
         shell: bash
         run: |
           PHP_VERSION=$(jq -r '.require."php"' composer.json | sed -E 's/[^0-9]*([0-9\.]+)$/\1/')
+          # Validate if PHP_VERSION is numeric
+          if ! [[ "$PHP_VERSION" =~ ^[0-9\.]+$ ]]; then
+            echo "PHP_VERSION '$PHP_VERSION' from composer.json is non-numeric"
+            exit 1
+          fi
           echo "PHP_VERSION is $PHP_VERSION"
           echo "php_version=$PHP_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -69,24 +74,154 @@ runs:
           extensions: curl, dom, gd, intl, json, ldap, mbstring, mysql, tidy, xdebug, zip
           tools: composer:v2
 
-    - name: Derive framework major version
-      id: derive-framwork-major-version
+    - name: Derive highest supported framework major version
+      id: derive-highest-supported-framwork-major-version
+      shell: bash
+      run: |
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __repositories.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/silverstripe/silverstripe-framework/tags
+        )
+        if [[ $RESP_CODE != "200" ]]; then
+          echo "Failed to fetch repositories.json - HTTP response code was $RESP_CODE"
+          cat __repositories.json
+          rm __repositories.json
+          exit 1
+        fi
+        SUPPORTED_FRAMEWORK_VERSION=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
+        rm __repositories.json
+        if ! [[ "$SUPPORTED_FRAMEWORK_VERSION" =~ ^[0-9]+$ ]]; then
+          echo "SUPPORTED_FRAMEWORK_VERSION '$SUPPORTED_FRAMEWORK_VERSION' is not a valid int"
+          exit 1
+        fi
+        echo "SUPPORTED_FRAMEWORK_VERSION is $SUPPORTED_FRAMEWORK_VERSION"
+        echo "supported_framework_version=$SUPPORTED_FRAMEWORK_VERSION" >> "$GITHUB_OUTPUT"
+
+    - name: Derive module framework major version
+      id: derive-module-framwork-major-version
       shell: bash
       run: |
         composer require silverstripe/framework --no-install
-        CMS_MAJOR_VERSION=$(jq -r '.require."silverstripe/framework"' composer.json | sed -E 's/[^0-9]*([0-9]+).*$/\1/')
+        MODULE_FRAMEWORK_VERSION=$(jq -r '.require."silverstripe/framework"' composer.json | sed -E 's/[^0-9]*([0-9]+).*$/\1/')
         composer remove silverstripe/framework --no-install
         rm composer.lock
-        echo "FRAMEWORK_MAJOR_VERSION is $FRAMEWORK_MAJOR_VERSION"
-        echo "framework_major_version=$FRAMEWORK_MAJOR_VERSION" >> "$GITHUB_OUTPUT"
+        if ! [[ "$MODULE_FRAMEWORK_VERSION" =~ ^[0-9]+$ ]]; then
+          echo "MODULE_FRAMEWORK_VERSION '$MODULE_FRAMEWORK_VERSION' is not a valid int"
+          exit 1
+        fi
+        echo "MODULE_FRAMEWORK_VERSION is $MODULE_FRAMEWORK_VERSION"
+        echo "module_framework_version=$MODULE_FRAMEWORK_VERSION" >> "$GITHUB_OUTPUT"
 
     - name: Derive branch
       id: derive-branch
       shell: bash
       env:
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
+        FRAMEWORK_MAJOR_VERSION: ${{ steps.derive-framwork-major-version.outputs.framework_major_version }}
       run: |
-        # Default branch is always assumed to be something like `6` i.e. not `main`
+        # DEFAULT_BRANCH is always assumed to be a numeric value i.e. not "main"
+        BRANCH=""
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
+          echo "Deriving branch for prev-major-curr-minor"
+          RESP_CODE=$(curl -w %{http_code} -s -L -o __tags.json \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/silverstripe/silverstripe-framework/tags
+          )
+          if [[ $RESP_CODE != "200" ]]; then
+            echo "Failed to get list of tags - HTTP response code was $RESP_CODE"
+            cat __tags.json
+            exit 1
+          fi
+          # CHECK IF A 
+          if ! [[ -z $(jq -r '.[] | select(.name == "$FRAMEWORK_MAJOR_VERSION.2.0")' __tags.json) ]]; then
+            echo "Tag 6.2.0 does not exist."
+          else
+            echo "Tag 6.2.0 exists."
+          fi
+          rm __tags.json
+
+          PREV_MAJOR_VERSION=$((FRAMEWORK_MAJOR_VERSION - 1))
+          TAG_CHECK_URL="https://api.github.com/repos/silverstripe/silverstripe-framework/tags"
+          echo "Checking for tag: ${PREV_MAJOR_VERSION}.2.0"
+          RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$TAG_CHECK_URL")
+          if echo "$RESPONSE" | jq -e ".[] | select(.name == \"${PREV_MAJOR_VERSION}.2.0\")" > /dev/null; then
+            echo "Tag ${PREV_MAJOR_VERSION}.2.0 found. No longer supported."
+            exit 0
+          else
+            echo "Tag ${PREV_MAJOR_VERSION}.2.0 not found. Proceeding with previous major, current minor logic."
+            # Logic to determine the actual branch for prev-major-curr-minor
+            # This part needs more specific definition based on how "current minor" is determined for the previous major
+            # For now, let's assume it should be the highest minor of the previous major.
+            BRANCH_LIST_URL="https://api.github.com/repos/silverstripe/silverstripe-framework/branches"
+            RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$BRANCH_LIST_URL")
+            HIGHEST_MINOR=$(echo "$RESPONSE" | jq -r ".[] | select(.name | startswith(\"${PREV_MAJOR_VERSION}.\")) | .name" | sort -V | tail -n 1)
+            if [[ -n "$HIGHEST_MINOR" ]]; then
+              BRANCH="$HIGHEST_MINOR"
+              echo "Derived branch: $BRANCH"
+            else
+              echo "Could not find a suitable branch for prev-major-curr-minor."
+              exit 1
+            fi
+          fi
+        elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
+          echo "Deriving branch for curr-major-curr-minor"
+          BRANCH_LIST_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/branches"
+          echo "Checking branches for current repository: ${GITHUB_REPOSITORY}"
+          RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$BRANCH_LIST_URL")
+          HIGHEST_MINOR=$(echo "$RESPONSE" | jq -r ".[] | select(.name | startswith(\"${DEFAULT_BRANCH}.\")) | .name" | sort -V | tail -n 1)
+          if [[ -n "$HIGHEST_MINOR" ]]; then
+            BRANCH="$HIGHEST_MINOR"
+            echo "Derived branch: $BRANCH"
+          else
+            echo "Could not find a suitable highest minor branch for current major (${DEFAULT_BRANCH})."
+            exit 1
+          fi
+        elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
+          echo "Deriving branch for curr-major-next-minor"
+          NEXT_MINOR_BRANCH="${FRAMEWORK_MAJOR_VERSION}.4" # Assuming .4 is the 'next' minor for demonstration
+          BRANCH_CHECK_URL="https://api.github.com/repos/silverstripe/silverstripe-framework/branches/$NEXT_MINOR_BRANCH"
+          echo "Checking for branch: $NEXT_MINOR_BRANCH in silverstripe/silverstripe-framework"
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GITHUB_TOKEN" "$BRANCH_CHECK_URL")
+          if [[ "$RESPONSE_CODE" == "200" ]]; then
+            echo "Branch $NEXT_MINOR_BRANCH found. No next minor version."
+            exit 0
+          else
+            echo "Branch $NEXT_MINOR_BRANCH not found. Proceeding with next minor logic."
+            # Logic to determine the actual branch for curr-major-next-minor
+            # This part needs more specific definition based on how "next minor" is determined
+            # For now, let's assume it means the branch one minor version higher than the highest current minor
+            BRANCH_LIST_URL="https://api.github.com/repos/silverstripe/silverstripe-framework/branches"
+            RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$BRANCH_LIST_URL")
+            HIGHEST_CURRENT_MINOR=$(echo "$RESPONSE" | jq -r ".[] | select(.name | startswith(\"${FRAMEWORK_MAJOR_VERSION}.\")) | .name" | sort -V | tail -n 1)
+
+            if [[ -n "$HIGHEST_CURRENT_MINOR" ]]; then
+                # Increment the minor version
+                MAJOR=$(echo "$HIGHEST_CURRENT_MINOR" | cut -d'.' -f1)
+                MINOR=$(echo "$HIGHEST_CURRENT_MINOR" | cut -d'.' -f2)
+                NEXT_MINOR=$((MINOR + 1))
+                BRANCH="${MAJOR}.${NEXT_MINOR}"
+                echo "Derived branch: $BRANCH"
+            else
+                echo "Could not determine the highest current minor for curr-major-next-minor."
+                exit 1
+            fi
+          fi
+        else
+          BRANCH="$DEFAULT_BRANCH" # Fallback for other branch types, or if INPUT_BRANCH was not 'schedule'
+          echo "Defaulting branch to: $BRANCH"
+        fi
+
+        if [[ -n "$BRANCH" ]]; then
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+        else
+          echo "Failed to derive branch. Exiting."
+          exit 1
+        fi
 
     - name: Checkout code
       uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
@@ -276,6 +411,12 @@ runs:
       if: always()
       run: |
         rm -rf __artifacts
+        if [[ -f __repositories.json ]]; then
+          rm __repositories.json
+        fi
+        if [[ -f __tags.json ]]; then
+          rm __tags.json
+        fi
         if [[ -f __branches.json ]]; then
           rm __branches.json
         fi
