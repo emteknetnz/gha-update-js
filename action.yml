@@ -27,8 +27,8 @@ runs:
         fi
 
     - name: Dispatch workflows
-      shell: bash
       if: inputs.branch_type == 'schedule'
+      shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -49,17 +49,16 @@ runs:
           fi
           echo "Dispatched workflow for branch_type $branch_type"
         done
-        echo "Exiting with success"
-        exit 0
 
     - name: Derive module support
       id: derive-module-support
+      if: inputs.branch_type != 'schedule'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
-        
+      
         # DO NOT MERGE - fork only
         GITHUB_REPOSITORY=silverstripe/silverstripe-campaign-admin
         
@@ -144,6 +143,7 @@ runs:
 
     - name: Derive module branch
       id: derive-module-branch
+      if: inputs.branch_type != 'schedule'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -161,7 +161,9 @@ runs:
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
           if [[ "$FRAMEWORK_TWO_TAG_EXISTS" == "1" ]]; then
             echo "The previous major release line no longer has bug fix support, so the 'prev-major-curr-minor' run type is no longer supported"
-            echo "Exiting with success"
+            # Using the proceed output variable as exit 0 by itself will only stop execution of the current step
+            # it will not stop execution of the entire workflow, unlike exit 1 which will also fail the build
+            echo "proceed=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           MAJOR=$((DEFAULT_BRANCH + $BRANCH_OFFSET - 1))
@@ -170,7 +172,7 @@ runs:
         elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
           if [[ "$FRAMEWORK_FOUR_TAG_EXISTS" == "1" ]]; then
             echo "The current major release line will have no further minor releases, so the 'curr-major-next-minor' run type should not create a pull-request"
-            echo "Exiting with success"
+            echo "proceed=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           MAJOR=$(($DEFAULT_BRANCH + $BRANCH_OFFSET))
@@ -189,7 +191,7 @@ runs:
         if [[ $MAJOR_BRANCH == "" ]]; then
           echo "Major branch $MAJOR was not found in the branches json"
           echo "This is expected if this module does not have a branch that supports CMS version $FRAMEWORK_SUPPORTED_MAJOR"
-          echo "Exiting with success"
+          echo "proceed=0" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]] || [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
@@ -211,10 +213,12 @@ runs:
         rm __branches.json
         echo "MODULE_BRANCH is $MODULE_BRANCH"
         echo "module_branch=$MODULE_BRANCH" >> "$GITHUB_OUTPUT"
+        echo "proceed=1" >> "$GITHUB_OUTPUT"
 
     # We need to get the branch of silverstripe/admin that matches the branch we're running js-updates on so we can `yarn build`
     - name: Derive admin branch
       id: derive-admin-branch
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       env:
         BRANCH_TYPE: ${{ inputs.branch_type }}
@@ -238,22 +242,26 @@ runs:
         echo "admin_branch=$ADMIN_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Checkout code
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
       with:
         ref: ${{ steps.derive-module-branch.outputs.module_branch }}
 
     - name: Read .nvmrc
       id: read-nvm
+      if: inputs.branch_type != 'schedule'
       shell: bash
       run: |
         echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
 
     - name: Setup node
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
       with:
         node-version: ${{ steps.read-nvm.outputs.version }}
 
     - name: Create temporary artifacts directory
+      if: inputs.branch_type != 'schedule'
       shell: bash
       run: |
         # Note: creating the directory for artifacts one level up from the checkout directory so that we do not commit
@@ -263,6 +271,7 @@ runs:
         touch __artifacts/placeholder
 
     - name: Output versions
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         echo "node version is:"
@@ -273,7 +282,7 @@ runs:
         yarn --version
 
     - name: Install admin JS
-      if: github.event.repository.name != 'silverstripe-admin'
+      if: github.event.repository.name != 'silverstripe-admin' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       env:
         ADMIN_BRANCH: ${{ steps.derive-admin-branch.outputs.admin_branch }}
@@ -291,6 +300,7 @@ runs:
     # Use `yarn install` rather than `yarn upgrade` to prevent the following error:
     # "error Outdated lockfile. Please run `yarn install` and try again."
     - name: Update yarn.lock
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         if [[ -f yarn.lock ]]; then
@@ -299,6 +309,7 @@ runs:
         yarn install
 
     - name: Read package.json
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       id: package-json
       shell: bash
       run: |
@@ -315,13 +326,13 @@ runs:
     # The following 3 steps make up `yarn build`
     # Splitting apart to make it easier to see where any failures originate from
     - name: Yarn lint
-      if: steps.package-json.outputs.lint == 'true'
+      if: steps.package-json.outputs.lint == 'true' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         yarn lint
 
     - name: Yarn test
-      if: steps.package-json.outputs.test == 'true'
+      if: steps.package-json.outputs.test == 'true' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         yarn test
@@ -329,13 +340,13 @@ runs:
     - name: Build JS with webpack
       # always run this and subsequent steps even if yarn.lint/yarn.test fails so that pull-request is
       # created which will result in a red pull-request build so it's easy to see where things are at
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
 
     - name: Remove any old pull-requests
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -375,7 +386,7 @@ runs:
         done
 
     - name: Remove any old branches
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -403,7 +414,7 @@ runs:
         done
 
     - name: Copy artifacts
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         AT_LEAST_ONE_FILE=0
@@ -422,11 +433,12 @@ runs:
     # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
     - name: Upload artifacts
       uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # @v4.4.3
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       with:
         name: artifacts
         path: __artifacts
 
+    # This step must happen before PRs are created
     - name: Delete temporary files
       shell: bash
       if: always()
@@ -446,7 +458,7 @@ runs:
         fi
 
     - name: Derive PR branch name
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       id: derive-pr-branch-name
       shell: bash
       env:
@@ -457,7 +469,7 @@ runs:
         echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Git
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       uses: silverstripe/gha-pull-request@v1
       with:
         branch: ${{ steps.derive-pr-branch-name.outputs.pr_branch }}
