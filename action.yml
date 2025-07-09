@@ -181,7 +181,7 @@ runs:
           https://api.github.com/repos/$GITHUB_REPOSITORY/branches
         )
         # Check if the major branch exists and exit with success if it does not
-        $MAJOR_BRANCH=$(jq -r --arg major "$MAJOR" '.[] | select(.name | test("^" + $major + "\\.\\d+$"))' __branches.json)
+        MAJOR_BRANCH=$(jq -r --arg major "$MAJOR" '.[] | select(.name | test("^" + $major + "\\.\\d+$"))' __branches.json)
         if [[ $MAJOR_BRANCH == "" ]]; then
           echo "Major branch $MAJOR was not found in the branches json"
           echo "This is expected if this module does not have a branch that supports CMS version $FRAMEWORK_SUPPORTED_MAJOR"
