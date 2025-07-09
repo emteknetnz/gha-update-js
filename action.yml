@@ -47,7 +47,9 @@ runs:
             echo "Failed to dispatch workflow - HTTP response code was $RESP_CODE"
             exit 1
           fi
+          echo "Dispatched workflow for branch_type $branch_type"
         done
+        echo "Exiting with success"
         exit 0
 
     - name: Derive module support
@@ -57,6 +59,10 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
+        
+        # DO NOT MERGE - fork only
+        GITHUB_REPOSITORY=silverstripe/silverstripe-campaign-admin
+        
         # Fetch repositories.json from silverstripe/supported-modules
         RESP_CODE=$(curl -w %{http_code} -s -L -o __repositories.json \
           https://raw.githubusercontent.com/silverstripe/supported-modules/refs/heads/main/repositories.json
@@ -75,10 +81,6 @@ runs:
         echo "framework_supported_major=$FRAMEWORK_SUPPORTED_MAJOR" >> "$GITHUB_OUTPUT"
         # Create a module map of { module_major: cms_version }
         # e.g. for silverstripe/admin it will be { "1": "4", "2": "5", "3": "6" }
-
-        # DO NOT MERGE - fork only
-        GITHUB_REPOSITORY=silverstripe/silverstripe-campaign-admin
-        
         MODULE_MAP=$(jq -r --arg github_repository "$GITHUB_REPOSITORY" '.supportedModules[] | select(.github == $github_repository) | .majorVersionMapping | to_entries | map({key: .value[0], value: .key}) | from_entries' __repositories.json)
         echo "MODULE_MAP is $MODULE_MAP"
         rm __repositories.json
@@ -159,6 +161,7 @@ runs:
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
           if [[ "$FRAMEWORK_TWO_TAG_EXISTS" == "1" ]]; then
             echo "The previous major release line no longer has bug fix support, so the 'prev-major-curr-minor' run type is no longer supported"
+            echo "Exiting with success"
             exit 0
           fi
           MAJOR=$((DEFAULT_BRANCH + $BRANCH_OFFSET - 1))
@@ -167,6 +170,7 @@ runs:
         elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
           if [[ "$FRAMEWORK_FOUR_TAG_EXISTS" == "1" ]]; then
             echo "The current major release line will have no further minor releases, so the 'curr-major-next-minor' run type should not create a pull-request"
+            echo "Exiting with success"
             exit 0
           fi
           MAJOR=$(($DEFAULT_BRANCH + $BRANCH_OFFSET))
@@ -185,6 +189,7 @@ runs:
         if [[ $MAJOR_BRANCH == "" ]]; then
           echo "Major branch $MAJOR was not found in the branches json"
           echo "This is expected if this module does not have a branch that supports CMS version $FRAMEWORK_SUPPORTED_MAJOR"
+          echo "Exiting with success"
           exit 0
         fi
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]] || [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
