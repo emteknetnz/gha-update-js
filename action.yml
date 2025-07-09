@@ -15,50 +15,50 @@ runs:
       id: validate-inputs
       shell: bash
       env:
-        INPUT_BRANCH_TYPE: ${{ inputs.branch_type }}
+        BRANCH_TYPE: ${{ inputs.branch_type }}
       run: |
-        if [[ "$INPUT_BRANCH_TYPE" != "schedule" && \
-          "$INPUT_BRANCH_TYPE" != "prev-major-curr-minor" && \
-          "$INPUT_BRANCH_TYPE" != "curr-major-curr-minor" && \
-          "$INPUT_BRANCH_TYPE" != "curr-major-next-minor" \
+        if [[ "$BRANCH_TYPE" != "schedule" && \
+          "$BRANCH_TYPE" != "prev-major-curr-minor" && \
+          "$BRANCH_TYPE" != "curr-major-curr-minor" && \
+          "$BRANCH_TYPE" != "curr-major-next-minor" \
         ]]; then
-          echo "Invalid input branch_type '$INPUT_BRANCH_TYPE'"
+          echo "Invalid input branch_type '$BRANCH_TYPE'"
           exit 1
         fi
 
-    - name: Derive branch type
-      id: derive-branch-type
+    - name: Dispatch workflows
       shell: bash
+      if: inputs.branch_type == 'schedule'
       env:
-        INPUT_BRANCH_TYPE: ${{ inputs.branch_type }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
-        if [[ $INPUT_BRANCH_TYPE == 'schedule' ]]; then
-          DAY_OF_MONTH=$(date +%d)
-          if [[ "$DAY_OF_MONTH" == "01" ]]; then
-            BRANCH_TYPE="prev-major-curr-minor"
-          elif [[ "$DAY_OF_MONTH" == "02" ]]; then
-            BRANCH_TYPE="curr-major-curr-minor"
-          elif [[ "$DAY_OF_MONTH" == "03" ]]; then
-            BRANCH_TYPE="curr-major-next-minor"
-          else
-            echo "Invalid DAY_OF_MONTH '$DAY_OF_MONTH'"
+        for branch_type in prev-major-curr-minor curr-major-curr-minor curr-major-next-minor; do
+          # https://docs.github.com/en/rest/actions/workflows?apiVersion=2022-11-28#create-a-workflow-dispatch-event
+          RESP_CODE=$(curl -w %{http_code} -s -L -o /dev/null \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ github.token }}"\
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/update-js.yml/dispatches \
+            -d "{\"ref\":\"$DEFAULT_BRANCH\",\"inputs\":{\"branch_type\":\"$branch_type\"}}"
+          )
+          if [[ $RESP_CODE != "204" ]]; then
+            echo "Failed to dispatch workflow - HTTP response code was $RESP_CODE"
             exit 1
           fi
-        else
-          BRANCH_TYPE="$INPUT_BRANCH_TYPE"
-        fi
-        echo "BRANCH_TYPE is $BRANCH_TYPE"
-        echo "branch_type=$BRANCH_TYPE" >> "$GITHUB_OUTPUT"
+        done
+        exit 0
 
-    - name: Derive supported framework
-      id: derive-supported-framwork
+    - name: Derive module support
+      id: derive-module-support
       shell: bash
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         # Fetch repositories.json from silverstripe/supported-modules
         RESP_CODE=$(curl -w %{http_code} -s -L -o __repositories.json \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ github.token }}" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
           https://raw.githubusercontent.com/silverstripe/supported-modules/refs/heads/main/repositories.json
         )
         if [[ $RESP_CODE != "200" ]]; then
@@ -67,14 +67,28 @@ runs:
           exit 1
         fi
         FRAMEWORK_SUPPORTED_MAJOR=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
-        rm __repositories.json
         if ! [[ "$FRAMEWORK_SUPPORTED_MAJOR" =~ ^[0-9]+$ ]]; then
           echo "FRAMEWORK_SUPPORTED_MAJOR '$FRAMEWORK_SUPPORTED_MAJOR' is not a valid int"
           exit 1
         fi
         echo "FRAMEWORK_SUPPORTED_MAJOR is $FRAMEWORK_SUPPORTED_MAJOR"
         echo "framework_supported_major=$FRAMEWORK_SUPPORTED_MAJOR" >> "$GITHUB_OUTPUT"
+        # Create a module map of { module_major: cms_version }
+        # e.g. for silverstripe/admin it will be { "1": "4", "2": "5", "3": "6" }
+        MODULE_MAP=$(jq -r --arg github_repository "$GITHUB_REPOSITORY" '.supportedModules[] | select(.github == $github_repository) | .majorVersionMapping | to_entries | map({key: .value[0], value: .key}) | from_entries' __repositories.json)
+        echo "MODULE_MAP is $MODULE_MAP"
+        rm __repositories.json
+        # Work out the CMS version that $DEFAULT_BRANCH maps to
+        # $DEFAULT_BRANCH is always assumed to be in $MODULE_MAP and is assumed to be numeric i.e. not "main"
+        DEFAULT_CMS_VERSION=$(echo "$MODULE_MAP" | jq --arg default_branch "$DEFAULT_BRANCH" '.[$default_branch] | tonumber')
+        echo "DEFAULT_CMS_VERSION is $DEFAULT_CMS_VERSION"
+        # Work out if there's an offset required on the default branch - will be non-zero if the default
+        # branch is on a different CMS version from $FRAMEWORK_SUPPORTED_MAJOR
+        BRANCH_OFFSET=$(($FRAMEWORK_SUPPORTED_MAJOR - $DEFAULT_CMS_VERSION))
+        echo "BRANCH_OFFSET is $BRANCH_OFFSET"
+        echo "branch_offset=$BRANCH_OFFSET" >> "$GITHUB_OUTPUT"
         # Make a GitHub API call to branches endpoint for silverstripe/silverstripe-framework
+        # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
         RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer ${{ github.token }}" \
@@ -82,7 +96,7 @@ runs:
           https://api.github.com/repos/silverstripe/silverstripe-framework/branches
         )
         if [[ $RESP_CODE != "200" ]]; then
-          echo "Failed to get list of tags - HTTP response code was $RESP_CODE"
+          echo "Failed to get list of branches - HTTP response code was $RESP_CODE"
           cat __branches.json
           exit 1
         fi
@@ -92,6 +106,7 @@ runs:
         echo "FRAMEWORK_HIGHEST_MINOR is $FRAMEWORK_HIGHEST_MINOR"
         echo "framework_highest_minor=$FRAMEWORK_HIGHEST_MINOR" >> "$GITHUB_OUTPUT"
         # Make a GitHub API call to tags endpoint for silverstripe/silverstripe-framework
+        # https://docs.github.com/en/rest/git/tags?apiVersion=2022-11-28
         RESP_CODE=$(curl -w %{http_code} -s -L -o __tags.json \
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer ${{ github.token }}" \
@@ -127,39 +142,48 @@ runs:
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
-        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-supported-framwork.outputs.framework_supported_major }}
-        FRAMEWORK_TWO_TAG_EXISTS: ${{ steps.derive-supported-framwork.outputs.framework_two_tag_exists }}
-        FRAMEWORK_FOUR_TAG_EXISTS: ${{ steps.derive-supported-framwork.outputs.framework_four_tag_exists }}
+        BRANCH_TYPE: ${{ inputs.branch_type }}
+        BRANCH_OFFSET: ${{ steps.derive-module-support.outputs.branch_offset }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-module-support.outputs.framework_supported_major }}
+        FRAMEWORK_TWO_TAG_EXISTS: ${{ steps.derive-module-support.outputs.framework_two_tag_exists }}
+        FRAMEWORK_FOUR_TAG_EXISTS: ${{ steps.derive-module-support.outputs.framework_four_tag_exists }}
       run: |
-        # $DEFAULT_BRANCH is always assumed to be a numeric value i.e. not "main", and is assumed to be the same CMS version as $FRAMEWORK_SUPPORTED_MAJOR
         # It's always assumed that this action is run every six months, and at least one month from a minor beta release
         # meaning that whenever we get the highest minor branch for the current minor, that minor branch will currently be stable
         echo "DEFAULT_BRANCH is $DEFAULT_BRANCH"
         MAJOR=""
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
           if [[ "$FRAMEWORK_TWO_TAG_EXISTS" == "1" ]]; then
-            echo "Because framework tag $FRAMEWORK_SUPPORTED_MAJOR.2.0 exists, the 'prev-major-curr-minor' run type is no longer supported"
+            echo "The previous major release line no longer has bug fix support, so the 'prev-major-curr-minor' run type is no longer supported"
             exit 0
           fi
-          MAJOR=$((DEFAULT_BRANCH - 1))
+          MAJOR=$((DEFAULT_BRANCH + $BRANCH_OFFSET - 1))
         elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
-          MAJOR="$DEFAULT_BRANCH"
+          MAJOR=$(($DEFAULT_BRANCH + $BRANCH_OFFSET))
         elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
           if [[ "$FRAMEWORK_FOUR_TAG_EXISTS" == "1" ]]; then
-            echo "Because framework tag $FRAMEWORK_SUPPORTED_MAJOR.4.0 exists, the 'curr-major-next-minor' run type should not create create a pull-request"
+            echo "The current major release line will have no further minor releases, so the 'curr-major-next-minor' run type should not create a pull-request"
             exit 0
           fi
-          MODULE_BRANCH="$DEFAULT_BRANCH"
+          MAJOR=$(($DEFAULT_BRANCH + $BRANCH_OFFSET))
+          MODULE_BRANCH=$MAJOR
+        fi
+        # Make a GitHub API call to get branches for the current repo
+        # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/$GITHUB_REPOSITORY/branches
+        )
+        # Check if the major branch exists and exit with success if it does not
+        $MAJOR_BRANCH=$(jq -r --arg major "$MAJOR" '.[] | select(.name | test("^" + $major + "\\.\\d+$"))' __branches.json)
+        if [[ $MAJOR_BRANCH == "" ]]; then
+          echo "Major branch $MAJOR was not found in the branches json"
+          echo "This is expected if this module does not have a branch that supports CMS version $FRAMEWORK_SUPPORTED_MAJOR"
+          exit 0
         fi
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]] || [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
-          # Make a GitHub API call to get branches for the current repo
-          RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/$GITHUB_REPOSITORY/branches
-          )
           if [[ $RESP_CODE != "200" ]]; then
             echo "Failed to get list of branches - HTTP response code was $RESP_CODE"
             cat __branches.json
@@ -169,23 +193,24 @@ runs:
           echo "MAJOR is $MAJOR"
           HIGHEST_MINOR=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json | cut -d'.' -f2)
           echo "HIGHEST_MINOR is $HIGHEST_MINOR"
-          rm __branches.json
           MODULE_BRANCH="$MAJOR.$HIGHEST_MINOR"
         fi
         if ! [[ "$MODULE_BRANCH" =~ ^[0-9]+$ ]] && ! [[ "$MODULE_BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]; then
           echo "MODULE_BRANCH '$MODULE_BRANCH' is non-numeric"
           exit 1
         fi
+        rm __branches.json
         echo "MODULE_BRANCH is $MODULE_BRANCH"
         echo "module_branch=$MODULE_BRANCH" >> "$GITHUB_OUTPUT"
 
+    # We need to get the branch of silverstripe/admin that matches the branch we're running js-updates on so we can `yarn build`
     - name: Derive admin branch
       id: derive-admin-branch
       shell: bash
       env:
-        BRANCH_TYPE: ${{ steps.derive-branch-type.outputs.branch_type }}
-        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-supported-framwork.outputs.framework_supported_major }}
-        FRAMEWORK_HIGHEST_MINOR: ${{ steps.derive-supported-framwork.outputs.framework_highest_minor }}
+        BRANCH_TYPE: ${{ inputs.branch_type }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-module-support.outputs.framework_supported_major }}
+        FRAMEWORK_HIGHEST_MINOR: ${{ steps.derive-module-support.outputs.framework_highest_minor }}
       run: |
         if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
           ADMIN_MAJOR=$((FRAMEWORK_SUPPORTED_MAJOR - 4))
