@@ -103,6 +103,9 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
+        # NO MERGE
+        GITHUB_REPOSITORY=silverstripe/silverstripe-campaign-admin
+        
         # Fetch repositories.json from silverstripe/supported-modules
         RESP_CODE=$(curl -w %{http_code} -s -L -o __repositories.json \
           https://raw.githubusercontent.com/silverstripe/supported-modules/refs/heads/main/repositories.json
