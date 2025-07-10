@@ -1,25 +1,263 @@
 name: Update JS
 description: Updates JS dependencies in Silverstripe core modules
 
+inputs:
+  branch_type:
+    description: 'The base branch to create the pull request against'
+    type: string
+    required: true
+    default: 'schedule'
+
 runs:
   using: composite
   steps:
+    - name: Validate inputs
+      id: validate-inputs
+      shell: bash
+      env:
+        BRANCH_TYPE: ${{ inputs.branch_type }}
+      run: |
+        if [[ "$BRANCH_TYPE" != "schedule" && \
+          "$BRANCH_TYPE" != "prev-major-curr-minor" && \
+          "$BRANCH_TYPE" != "curr-major-curr-minor" && \
+          "$BRANCH_TYPE" != "curr-major-next-minor" \
+        ]]; then
+          echo "Invalid input branch_type '$BRANCH_TYPE'"
+          exit 1
+        fi
+
+    - name: Dispatch workflows
+      if: inputs.branch_type == 'schedule'
+      shell: bash
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        for branch_type in prev-major-curr-minor curr-major-curr-minor curr-major-next-minor; do
+          # https://docs.github.com/en/rest/actions/workflows?apiVersion=2022-11-28#create-a-workflow-dispatch-event
+          RESP_CODE=$(curl -w %{http_code} -s -L -o /dev/null \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ github.token }}"\
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/update-js.yml/dispatches \
+            -d "{\"ref\":\"$DEFAULT_BRANCH\",\"inputs\":{\"branch_type\":\"$branch_type\"}}"
+          )
+          if [[ $RESP_CODE != "204" ]]; then
+            echo "Failed to dispatch workflow - HTTP response code was $RESP_CODE"
+            exit 1
+          fi
+          echo "Dispatched workflow for branch_type $branch_type"
+        done
+
+    - name: Derive module support
+      id: derive-module-support
+      if: inputs.branch_type != 'schedule'
+      shell: bash
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        # Fetch repositories.json from silverstripe/supported-modules
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __repositories.json \
+          https://raw.githubusercontent.com/silverstripe/supported-modules/refs/heads/main/repositories.json
+        )
+        if [[ $RESP_CODE != "200" ]]; then
+          echo "Failed to fetch repositories.json - HTTP response code was $RESP_CODE"
+          cat __repositories.json
+          exit 1
+        fi
+        FRAMEWORK_SUPPORTED_MAJOR=$(jq -r '.supportedModules[] | select(.packagist == "silverstripe/framework") | .majorVersionMapping | keys[]' __repositories.json | tail -n 1)
+        if ! [[ "$FRAMEWORK_SUPPORTED_MAJOR" =~ ^[0-9]+$ ]]; then
+          echo "FRAMEWORK_SUPPORTED_MAJOR '$FRAMEWORK_SUPPORTED_MAJOR' is not a valid int"
+          exit 1
+        fi
+        echo "FRAMEWORK_SUPPORTED_MAJOR is $FRAMEWORK_SUPPORTED_MAJOR"
+        echo "framework_supported_major=$FRAMEWORK_SUPPORTED_MAJOR" >> "$GITHUB_OUTPUT"
+        # Create a module map of { module_major: cms_version }
+        # e.g. for silverstripe/admin it will be { "1": "4", "2": "5", "3": "6" }
+        MODULE_MAP=$(jq -r --arg github_repository "$GITHUB_REPOSITORY" '.supportedModules[] | select(.github == $github_repository) | .majorVersionMapping | to_entries | map({key: .value[0], value: .key}) | from_entries' __repositories.json)
+        echo "MODULE_MAP is $MODULE_MAP"
+        rm __repositories.json
+        # Work out the CMS version that $DEFAULT_BRANCH maps to
+        # $DEFAULT_BRANCH is always assumed to be in $MODULE_MAP and is assumed to be numeric i.e. not "main"
+        DEFAULT_CMS_VERSION=$(echo "$MODULE_MAP" | jq --arg default_branch "$DEFAULT_BRANCH" '.[$default_branch] | tonumber')
+        echo "DEFAULT_CMS_VERSION is $DEFAULT_CMS_VERSION"
+        # Work out if there's an offset required on the default branch - will be non-zero if the default
+        # branch is on a different CMS version from $FRAMEWORK_SUPPORTED_MAJOR
+        BRANCH_OFFSET=$(($FRAMEWORK_SUPPORTED_MAJOR - $DEFAULT_CMS_VERSION))
+        echo "BRANCH_OFFSET is $BRANCH_OFFSET"
+        echo "branch_offset=$BRANCH_OFFSET" >> "$GITHUB_OUTPUT"
+        # Make a GitHub API call to branches endpoint for silverstripe/silverstripe-framework
+        # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/silverstripe/silverstripe-framework/branches
+        )
+        if [[ $RESP_CODE != "200" ]]; then
+          echo "Failed to get list of branches - HTTP response code was $RESP_CODE"
+          cat __branches.json
+          exit 1
+        fi
+        # Get the highest supported framework minor branch
+        FRAMEWORK_HIGHEST_MINOR=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '[ .[] | select(.name | test("^" + $framework_supported_major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json  | cut -d'.' -f2)
+        rm __branches.json
+        echo "FRAMEWORK_HIGHEST_MINOR is $FRAMEWORK_HIGHEST_MINOR"
+        echo "framework_highest_minor=$FRAMEWORK_HIGHEST_MINOR" >> "$GITHUB_OUTPUT"
+        # Make a GitHub API call to tags endpoint for silverstripe/silverstripe-framework
+        # https://docs.github.com/en/rest/git/tags?apiVersion=2022-11-28
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __tags.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/silverstripe/silverstripe-framework/tags
+        )
+        if [[ $RESP_CODE != "200" ]]; then
+          echo "Failed to get list of tags - HTTP response code was $RESP_CODE"
+          cat __tags.json
+          exit 1
+        fi
+        # Check if there is y.2.0 tag for the current supported major version of framework
+        FRAMEWORK_TWO_TAG_EXISTS=0
+        TWO_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".2.0")' __tags.json)
+        if ! [[ -z $TWO_TAG ]]; then
+          FRAMEWORK_TWO_TAG_EXISTS=1
+        fi
+        echo "FRAMEWORK_TWO_TAG_EXISTS is $FRAMEWORK_TWO_TAG_EXISTS"
+        echo "framework_two_tag_exists=$FRAMEWORK_TWO_TAG_EXISTS" >> "$GITHUB_OUTPUT"
+        # Check if there is y.4.0 tag for the current supported major version of framework
+        FRAMEWORK_FOUR_TAG_EXISTS=0
+        FOUR_TAG=$(jq -r --arg framework_supported_major "$FRAMEWORK_SUPPORTED_MAJOR" '.[] | select(.name == $framework_supported_major + ".4.0")' __tags.json)
+        if ! [[ -z $FOUR_TAG ]]; then
+          FRAMEWORK_FOUR_TAG_EXISTS=1
+        fi
+        echo "FRAMEWORK_FOUR_TAG_EXISTS is $FRAMEWORK_FOUR_TAG_EXISTS"
+        echo "framework_four_tag_exists=$FRAMEWORK_FOUR_TAG_EXISTS" >> "$GITHUB_OUTPUT"
+        rm __tags.json
+
+    - name: Derive module branch
+      id: derive-module-branch
+      if: inputs.branch_type != 'schedule'
+      shell: bash
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        BRANCH_TYPE: ${{ inputs.branch_type }}
+        BRANCH_OFFSET: ${{ steps.derive-module-support.outputs.branch_offset }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-module-support.outputs.framework_supported_major }}
+        FRAMEWORK_TWO_TAG_EXISTS: ${{ steps.derive-module-support.outputs.framework_two_tag_exists }}
+        FRAMEWORK_FOUR_TAG_EXISTS: ${{ steps.derive-module-support.outputs.framework_four_tag_exists }}
+      run: |
+        # It's always assumed that this action is run every six months, and at least one month from a minor beta release
+        # meaning that whenever we get the highest minor branch for the current minor, that minor branch will currently be stable
+        echo "DEFAULT_BRANCH is $DEFAULT_BRANCH"
+        MAJOR=""
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
+          if [[ "$FRAMEWORK_TWO_TAG_EXISTS" == "1" ]]; then
+            echo "The previous major release line no longer has bug fix support, so the 'prev-major-curr-minor' run type is no longer supported"
+            # Using the proceed output variable as exit 0 by itself will only stop execution of the current step
+            # it will not stop execution of the entire workflow, unlike exit 1 which will also fail the build
+            echo "proceed=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          MAJOR=$((DEFAULT_BRANCH + $BRANCH_OFFSET - 1))
+        elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
+          MAJOR=$(($DEFAULT_BRANCH + $BRANCH_OFFSET))
+        elif [[ "$BRANCH_TYPE" == "curr-major-next-minor" ]]; then
+          if [[ "$FRAMEWORK_FOUR_TAG_EXISTS" == "1" ]]; then
+            echo "The current major release line will have no further minor releases, so the 'curr-major-next-minor' run type should not create a pull-request"
+            echo "proceed=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          MAJOR=$(($DEFAULT_BRANCH + $BRANCH_OFFSET))
+          MODULE_BRANCH=$MAJOR
+        fi
+        # Make a GitHub API call to get branches for the current repo
+        # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __branches.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/$GITHUB_REPOSITORY/branches
+        )
+        # Check if the major branch exists and exit with success if it does not
+        MAJOR_BRANCH=$(jq -r --arg major "$MAJOR" '.[] | select(.name | test("^" + $major + "\\.\\d+$"))' __branches.json)
+        if [[ $MAJOR_BRANCH == "" ]]; then
+          echo "Major branch $MAJOR was not found in the branches json"
+          echo "This is expected if this module does not have a branch that supports CMS version $FRAMEWORK_SUPPORTED_MAJOR"
+          echo "proceed=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]] || [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
+          if [[ $RESP_CODE != "200" ]]; then
+            echo "Failed to get list of branches - HTTP response code was $RESP_CODE"
+            cat __branches.json
+            exit 1
+          fi
+          # Find the highest minor branch for major
+          echo "MAJOR is $MAJOR"
+          HIGHEST_MINOR=$(jq -r --arg major "$MAJOR" '[ .[] | select(.name | test("^" + $major + "\\.\\d+$")) | .name ] | sort_by(split(".") | .[1] | tonumber) | .[-1]' __branches.json | cut -d'.' -f2)
+          echo "HIGHEST_MINOR is $HIGHEST_MINOR"
+          MODULE_BRANCH="$MAJOR.$HIGHEST_MINOR"
+        fi
+        if ! [[ "$MODULE_BRANCH" =~ ^[0-9]+$ ]] && ! [[ "$MODULE_BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "MODULE_BRANCH '$MODULE_BRANCH' is non-numeric"
+          exit 1
+        fi
+        rm __branches.json
+        echo "MODULE_BRANCH is $MODULE_BRANCH"
+        echo "module_branch=$MODULE_BRANCH" >> "$GITHUB_OUTPUT"
+        echo "proceed=1" >> "$GITHUB_OUTPUT"
+
+    # We need to get the branch of silverstripe/admin that matches the branch we're running js-updates on so we can `yarn build`
+    - name: Derive admin branch
+      id: derive-admin-branch
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      shell: bash
+      env:
+        BRANCH_TYPE: ${{ inputs.branch_type }}
+        FRAMEWORK_SUPPORTED_MAJOR: ${{ steps.derive-module-support.outputs.framework_supported_major }}
+        FRAMEWORK_HIGHEST_MINOR: ${{ steps.derive-module-support.outputs.framework_highest_minor }}
+      run: |
+        if [[ "$BRANCH_TYPE" == "prev-major-curr-minor" ]]; then
+          ADMIN_MAJOR=$((FRAMEWORK_SUPPORTED_MAJOR - 4))
+          ADMIN_BRANCH="$ADMIN_MAJOR.4"
+        elif [[ "$BRANCH_TYPE" == "curr-major-curr-minor" ]]; then
+          ADMIN_MAJOR=$((FRAMEWORK_SUPPORTED_MAJOR - 3))
+          ADMIN_BRANCH="$ADMIN_MAJOR.$FRAMEWORK_HIGHEST_MINOR"
+        elif [[ "$BRANCH_TYPE" == 'curr-major-next-minor' ]]; then
+          ADMIN_BRANCH=$((FRAMEWORK_SUPPORTED_MAJOR - 3))
+        fi
+        if ! [[ "$ADMIN_BRANCH" =~ ^[0-9]+$ ]] && ! [[ "$ADMIN_BRANCH" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "ADMIN_BRANCH '$ADMIN_BRANCH' is non-numeric"
+          exit 1
+        fi
+        echo "ADMIN_BRANCH is $ADMIN_BRANCH"
+        echo "admin_branch=$ADMIN_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Checkout code
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+      with:
+        ref: ${{ steps.derive-module-branch.outputs.module_branch }}
 
     - name: Read .nvmrc
       id: read-nvm
+      if: inputs.branch_type != 'schedule'
       shell: bash
       run: |
         echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
 
     - name: Setup node
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
       with:
         node-version: ${{ steps.read-nvm.outputs.version }}
 
     - name: Create temporary artifacts directory
+      if: inputs.branch_type != 'schedule'
       shell: bash
       run: |
         # Note: creating the directory for artifacts one level up from the checkout directory so that we do not commit
@@ -29,6 +267,7 @@ runs:
         touch __artifacts/placeholder
 
     - name: Output versions
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         echo "node version is:"
@@ -39,15 +278,17 @@ runs:
         yarn --version
 
     - name: Install admin JS
-      if: github.event.repository.name != 'silverstripe-admin'
+      if: github.event.repository.name != 'silverstripe-admin' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
+      env:
+        ADMIN_BRANCH: ${{ steps.derive-admin-branch.outputs.admin_branch }}
       run: |
         # Install admin js in sibling directory so shared components are available
         DIR=$(pwd)
         cd ..
         git clone https://github.com/silverstripe/silverstripe-admin.git admin
-        # Assumption is that the default branch of admin is the correct one to build against
         cd admin
+        git checkout $ADMIN_BRANCH
         # yarn comes preinstalled with actions/setup-node
         yarn install
         cd $DIR
@@ -55,6 +296,7 @@ runs:
     # Use `yarn install` rather than `yarn upgrade` to prevent the following error:
     # "error Outdated lockfile. Please run `yarn install` and try again."
     - name: Update yarn.lock
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         if [[ -f yarn.lock ]]; then
@@ -63,6 +305,7 @@ runs:
         yarn install
 
     - name: Read package.json
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       id: package-json
       shell: bash
       run: |
@@ -79,13 +322,13 @@ runs:
     # The following 3 steps make up `yarn build`
     # Splitting apart to make it easier to see where any failures originate from
     - name: Yarn lint
-      if: steps.package-json.outputs.lint == 'true'
+      if: steps.package-json.outputs.lint == 'true' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         yarn lint
 
     - name: Yarn test
-      if: steps.package-json.outputs.test == 'true'
+      if: steps.package-json.outputs.test == 'true' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         yarn test
@@ -93,28 +336,32 @@ runs:
     - name: Build JS with webpack
       # always run this and subsequent steps even if yarn.lint/yarn.test fails so that pull-request is
       # created which will result in a red pull-request build so it's easy to see where things are at
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
 
     - name: Remove any old pull-requests
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
+        MODULE_BRANCH: ${{ steps.derive-module-branch.outputs.module_branch }}
       run: |
         # https://docs.github.com/en/rest/pulls/pulls#list-pull-requests
-        RESP_CODE=$(curl -w %{http_code} -s -o __response.json \
-        -X GET https://api.github.com/repos/$GITHUB_REPOSITORY/pulls \
-        -H "Accept: application/vnd.github.v3+json")
+        RESP_CODE=$(curl -w %{http_code} -s -L -o __pull_requests.json \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/$GITHUB_REPOSITORY/pulls
+        )
         if [[ $RESP_CODE != "200" ]]; then
           echo "Unable to list pull-requests - HTTP response code was $RESP_CODE"
           exit 1
         fi
-        JSON=$(cat __response.json)
-        rm __response.json
-        NUMBERS=$(echo $JSON | jq '.[] | select(.title=="DEP Update JS dependencies" and .user.login=="github-actions[bot]") | .number')
+        JSON=$(cat __pull_requests.json)
+        rm __pull_requests.json
+        NUMBERS=$(echo $JSON | jq --arg module_branch "$MODULE_BRANCH" '.[] | select(.base.ref==$module_branch and .title=="DEP Update JS dependencies" and .user.login=="github-actions[bot]") | .number')
         for NUMBER in $NUMBERS; do
           # https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request
           RESP_CODE=$(curl -w %{http_code} -s -o /dev/null \
@@ -135,25 +382,26 @@ runs:
         done
 
     - name: Remove any old branches
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
+        MODULE_BRANCH: ${{ steps.derive-module-branch.outputs.module_branch }}
       run: |
         # Gets all branches from GitHub API
         # https://docs.github.com/en/rest/branches/branches?apiVersion=2022-11-28#list-branches
         RESP_CODE=$(curl -w %{http_code} -s -o __branches.json \
-        -X GET "https://api.github.com/repos/$GITHUB_REPOSITORY/branches?per_page=100" \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer ${{ github.token }}" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
+          -X GET "https://api.github.com/repos/$GITHUB_REPOSITORY/branches?per_page=100" \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ github.token }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
         )
         if [[ $RESP_CODE != "200" ]]; then
           echo "Unable to read list of branches - HTTP response code was $RESP_CODE"
           cat __branches.json
           exit 1
         fi
-        BRANCHES=$(cat __branches.json | jq -r '.[] | .name | select(.|test("^pulls\/[0-9]\/update-js-[0-9]{10}$"))')
+        BRANCHES=$(cat __branches.json | jq -r --arg module_branch "$MODULE_BRANCH" '.[] | .name | select(.|test("^pulls\/" + $module_branch + "\/update-js-[0-9]{10}$"))')
         for BRANCH in $BRANCHES; do
           if [[ "$BRANCH" =~ ^pulls/[0-9\.]+/update\-js\-[0-9]+$ ]]; then
             git push origin --delete "$BRANCH"
@@ -162,7 +410,7 @@ runs:
         done
 
     - name: Copy artifacts
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
         AT_LEAST_ONE_FILE=0
@@ -181,37 +429,45 @@ runs:
     # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
     - name: Upload artifacts
       uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # @v4.4.3
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       with:
         name: artifacts
         path: __artifacts
 
+    # This step must happen before PRs are created
     - name: Delete temporary files
       shell: bash
       if: always()
       run: |
         rm -rf __artifacts
+        if [[ -f __repositories.json ]]; then
+          rm __repositories.json
+        fi
+        if [[ -f __tags.json ]]; then
+          rm __tags.json
+        fi
         if [[ -f __branches.json ]]; then
           rm __branches.json
         fi
+        if [[ -f __pull_requests.json ]]; then
+          rm __pull_requests.json
+        fi
 
-    - name: Generate branch name
-      if: always()
-      id: generate-branch-name
+    - name: Derive PR branch name
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      id: derive-pr-branch-name
       shell: bash
       env:
-        GITHUB_REF: ${{ github.ref }}
+        MODULE_BRANCH: ${{ steps.derive-module-branch.outputs.module_branch }}
       run: |
-        # Convert refs/heads/mybranch to mybranch
-        CUT=$(echo $GITHUB_REF | cut -c 12-)
-        # e.g. pulls/1/update-js-1647810133
-        BRANCH=pulls/$CUT/update-js-$(date +%s)
-        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+        PR_BRANCH=pulls/$MODULE_BRANCH/update-js-$(date +%s)
+        echo "PR_BRANCH is $PR_BRANCH"
+        echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Git
-      if: always()
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       uses: silverstripe/gha-pull-request@v1
       with:
-        branch: ${{ steps.generate-branch-name.outputs.branch }}
+        branch: ${{ steps.derive-pr-branch-name.outputs.pr_branch }}
         title: DEP Update JS dependencies
         description: Automated yarn upgrade and yarn build
