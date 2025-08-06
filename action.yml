@@ -353,15 +353,20 @@ runs:
 
     # The following 3 steps make up `yarn build`
     # Splitting apart to make it easier to see where any failures originate from
+    # continue-on-error is used for Yarn lint and Yarn test so that subsequent steps still run even if they fail
+    # so that a pull-request, which will later fail CI, can still be created. This gives higher visibility
+    # to any failures
     - name: Yarn lint
       if: steps.package-json.outputs.lint == 'true' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
+      continue-on-error: true
       run: |
         yarn lint
 
     - name: Yarn test
       if: steps.package-json.outputs.test == 'true' && inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
+      continue-on-error: true
       run: |
         yarn test
 
