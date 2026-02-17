@@ -383,18 +383,6 @@ runs:
           echo "webpack-cli is not installed, skipping webpack build"
         fi
 
-    - name: Check for changes
-      id: check-changes
-      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
-      shell: bash
-      run: |
-        if [[ -z "$(git status --porcelain)" ]]; then
-          echo "No changes detected, skipping pull-request creation"
-          echo "has_changes=0" >> "$GITHUB_OUTPUT"
-        else
-          echo "has_changes=1" >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Remove any old pull-requests
       if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1' && steps.check-changes.outputs.has_changes == '1'
       shell: bash
@@ -505,6 +493,18 @@ runs:
         fi
         if [[ -f __pull_requests.json ]]; then
           rm __pull_requests.json
+        fi
+
+    - name: Check for changes
+      id: check-changes
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      shell: bash
+      run: |
+        if [[ -z "$(git status --porcelain)" ]]; then
+          echo "No changes detected, skipping pull-request creation"
+          echo "has_changes=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_changes=1" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Derive PR branch name
