@@ -121,12 +121,8 @@ runs:
         echo "framework_supported_major=$FRAMEWORK_SUPPORTED_MAJOR" >> "$GITHUB_OUTPUT"
         # Create a module map of { module_major: cms_version }
         # e.g. for silverstripe/admin it will be { "1": "4", "2": "5", "3": "6" }
-        #
-        # Can't use emteknetnz/webpack-config as it reads form repositories.json
         GH_REPO=silverstripe/webpack-config
         MODULE_MAP=$(jq -r --arg github_repository "$GH_REPO" '(.supportedModules + .misc)[] | select(.github == $github_repository) | .majorVersionMapping | to_entries | map({key: .value[0], value: .key}) | from_entries' __repositories.json)
-        #
-        #
         echo "MODULE_MAP is $MODULE_MAP"
         rm __repositories.json
         # Work out the CMS version that $DEFAULT_BRANCH maps to
@@ -387,8 +383,20 @@ runs:
           echo "webpack-cli is not installed, skipping webpack build"
         fi
 
-    - name: Remove any old pull-requests
+    - name: Check for changes
+      id: check-changes
       if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      shell: bash
+      run: |
+        if [[ -z "$(git status --porcelain)" ]]; then
+          echo "No changes detected, skipping pull-request creation"
+          echo "has_changes=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_changes=1" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Remove any old pull-requests
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1' && steps.check-changes.outputs.has_changes == '1'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -428,7 +436,7 @@ runs:
         done
 
     - name: Remove any old branches
-      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1' && steps.check-changes.outputs.has_changes == '1'
       shell: bash
       env:
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -500,7 +508,7 @@ runs:
         fi
 
     - name: Derive PR branch name
-      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1' && steps.check-changes.outputs.has_changes == '1'
       id: derive-pr-branch-name
       shell: bash
       env:
@@ -511,7 +519,7 @@ runs:
         echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
 
     - name: Git
-      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
+      if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1' && steps.check-changes.outputs.has_changes == '1'
       uses: silverstripe/gha-pull-request@v1
       with:
         branch: ${{ steps.derive-pr-branch-name.outputs.pr_branch }}
