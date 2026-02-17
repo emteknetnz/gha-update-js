@@ -381,7 +381,11 @@ runs:
       if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
       shell: bash
       run: |
-        NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
+        if [[ -f node_modules/.bin/webpack-cli ]]; then
+          NODE_ENV=production node_modules/.bin/webpack --mode production --bail --progress
+        else
+          echo "webpack-cli is not installed, skipping webpack build"
+        fi
 
     - name: Remove any old pull-requests
       if: inputs.branch_type != 'schedule' && steps.derive-module-branch.outputs.proceed == '1'
